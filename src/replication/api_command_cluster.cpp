@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2019-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -65,7 +65,7 @@ AgentConn_t* CreateAgentBase ( const AgentDesc_t& tDesc, int64_t iTimeoutMs )
 	pAgent->m_tDesc.CloneFrom ( tDesc );
 	pAgent->SetNoLimitReplySize();
 	pAgent->m_tDesc.m_pDash = new HostDashboard_t;
-	pAgent->m_iMyConnectTimeoutMs = g_iAgentConnectTimeoutMs;
+	pAgent->m_iMyConnectTimeoutMs = ReplicationTimeoutConnect();
 	pAgent->m_iMyQueryTimeoutMs = iTimeoutMs;
 	return pAgent;
 }
@@ -76,9 +76,10 @@ bool PerformRemoteTasksWrap ( VectorAgentConn_t & dNodes, RequestBuilder_i & tRe
 	if ( dNodes.IsEmpty() )
 		return true;
 
-	int iQueryRetry = ( bRetry ? g_iAgentRetryCount : -1 );
+	int iQueryRetry = ( bRetry ? ReplicationRetryCount() : -1 );
+	int iQueryDelay = ( bRetry ? ReplicationRetryDelay() : -1 );
 	int iNodes = dNodes.GetLength();
-	int iFinished = PerformRemoteTasks ( dNodes, &tReq, &tReply, iQueryRetry );
+	int iFinished = PerformRemoteTasks ( dNodes, &tReq, &tReply, iQueryRetry, iQueryDelay );
 
 	bool bOk = ( iFinished==iNodes );
 	if ( !bOk || TlsMsg::HasErr() )
@@ -103,15 +104,16 @@ bool PerformRemoteTasksWrap ( VectorAgentConn_t & dNodes, RequestBuilder_i & tRe
 // handler of all remote commands via API parsed at daemon as SEARCHD_COMMAND_CLUSTER
 void HandleAPICommandCluster ( ISphOutputBuffer & tOut, WORD uCommandVer, InputBuffer_c & tBuf, const char * szClient )
 {
-	if ( !CheckCommandVersion ( uCommandVer, VER_COMMAND_CLUSTER, tOut ))
-		return;
+	auto eClusterCmd = (E_CLUSTER)tBuf.GetWord();
 
-	auto eClusterCmd = (E_CLUSTER) tBuf.GetWord ();
-	CSphString sCluster;
+	// GET_NODE_VER should skip version check and provide both VER_COMMAND_CLUSTER and VER_COMMAND_REPLICATE
+	if ( eClusterCmd!=E_CLUSTER::GET_NODE_VER && !CheckCommandVersion ( uCommandVer, VER_COMMAND_CLUSTER, tOut ) )
+		return;
 
 	if ( eClusterCmd!=E_CLUSTER::FILE_SEND )
 		sphLogDebugRpl ( "remote cluster command %d(%s), client %s", (int) eClusterCmd, szClusterCmd (eClusterCmd), szClient );
 
+	CSphString sCluster;
 	TlsMsg::ResetErr();
 	switch (eClusterCmd) {
 	case E_CLUSTER::DELETE_:
@@ -146,6 +148,14 @@ void HandleAPICommandCluster ( ISphOutputBuffer & tOut, WORD uCommandVer, InputB
 		ReceiveDistIndex ( tOut, tBuf, sCluster );
 		break;
 
+	case E_CLUSTER::GET_NODE_STATE:
+		ReceiveClusterGetState ( tOut, tBuf, sCluster );
+		break;
+
+	case E_CLUSTER::GET_NODE_VER:
+		ReceiveClusterGetVer ( tOut );
+		break;
+
 	default:
 		TlsMsg::Err ( "INTERNAL ERROR: unhandled command %d", (int) eClusterCmd );
 		break;
@@ -157,10 +167,65 @@ void HandleAPICommandCluster ( ISphOutputBuffer & tOut, WORD uCommandVer, InputB
 	assert ( eClusterCmd != E_CLUSTER::FILE_SEND );
 
 	auto szError = TlsMsg::szError();
-	sphLogDebugRpl ( "remote cluster '%s' command %d, client %s - %s", sCluster.scstr(), (int)eClusterCmd, szClient, szError );
+	sphLogDebugRpl ( "remote cluster '%s' command %s(%d), client %s - %s", sCluster.scstr(), szClusterCmd ( eClusterCmd ), (int)eClusterCmd, szClient, szError );
 
 	auto tReply = APIHeader ( tOut, SEARCHD_ERROR );
 	tOut.SendString ( SphSprintf ( "[%s] %s", szIncomingIP(), szError ).cstr() );
 
-	ReportClusterError ( sCluster, szError, szClient, (int)eClusterCmd );
+	ReportClusterError ( sCluster, szError, szClient, eClusterCmd );
+}
+
+// 200 msec is ok as we do not need to any missed nodes in cluster node list
+constexpr int g_iAnyNodesTimeoutMs = 200;
+constexpr int g_iNodeRetryWaitMs = 500;
+
+static int g_iReplConnectTimeoutMs = 0;
+static int g_iReplQueryTimeoutMs = 0;
+static int g_iReplRetryCount = 0;
+static int g_iReplRetryDelayMs = 0;
+
+void ReplicationSetTimeouts ( int iConnectTimeoutMs, int iQueryTimeoutMs, int iRetryCount, int iRetryDelayMs )
+{
+	g_iReplConnectTimeoutMs = iConnectTimeoutMs;
+	g_iReplQueryTimeoutMs = iQueryTimeoutMs;
+	g_iReplRetryCount = iRetryCount;
+	g_iReplRetryDelayMs = iRetryDelayMs;
+}
+
+int64_t ReplicationTimeoutQuery ( int64_t iTimeout )
+{
+	// need default of 2 minutes in msec for replication requests as they are mostly long-running
+	int64_t iTmAtLeast2Min = Max ( g_iReplQueryTimeoutMs, 120 * 1000 );
+	// should be 2 minutes or timeout if it is longer
+	return Max ( iTmAtLeast2Min, Min ( iTimeout, INT_MAX ) );
+}
+
+int ReplicationTimeoutConnect ()
+{
+	return g_iReplConnectTimeoutMs;
+}
+
+int ReplicationRetryCount ()
+{
+	return g_iReplRetryCount;
+}
+
+int ReplicationRetryDelay ()
+{
+	return g_iReplRetryDelayMs;
+}
+
+int ReplicationTimeoutAnyNode ()
+{
+	return g_iAnyNodesTimeoutMs;
+}
+
+int ReplicationFileRetryCount ()
+{
+	return Max ( g_iReplRetryCount, 3 ); // should be at least 3 try on file send failure
+}
+
+int ReplicationFileRetryDelay ()
+{
+	return Max ( g_iReplRetryDelayMs, g_iNodeRetryWaitMs );
 }

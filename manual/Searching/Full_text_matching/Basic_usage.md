@@ -14,11 +14,10 @@ Using the [full-text query syntax](../../Searching/Full_text_matching/Operators.
 <!-- example Example_1 -->
 
 ```sql
-SELECT * FROM index WHERE MATCH('cats|birds');
+SELECT * FROM myindex WHERE MATCH('cats|birds');
 ```
 
-[SELECT](../../Searching/Full_text_matching/Basic_usage.md#SQL) statement uses [MATCH](../../Searching/Full_text_matching/Basic_usage.md) clause for performing full-text searches. It accepts an input string in which all [full-text operators](../../Searching/Full_text_matching/Operators.md) are available.
-
+The [SELECT](../../Searching/Full_text_matching/Basic_usage.md#SQL) statement uses a [MATCH](../../Searching/Full_text_matching/Basic_usage.md) clause, which must come after WHERE, for performing full-text searches. `MATCH()` accepts an input string in which all [full-text operators](../../Searching/Full_text_matching/Operators.md) are available.
 
 <!-- intro -->
 ##### SQL:
@@ -38,8 +37,13 @@ SELECT * FROM myindex WHERE MATCH('"find me fast"/2');
 |    2 |   12 | second find me |
 +------+------+----------------+
 2 rows in set (0.00 sec)
+```
 
+<!-- request MATCH with filters -->
+An example of a more complex query using MATCH with WHERE filters.
 
+```sql
+SELECT * FROM myindex WHERE MATCH('cats|birds') AND (`title`='some title' AND `id`=123);
 ```
 
 <!-- end -->
@@ -97,6 +101,21 @@ By default, keywords are combined using the OR operator. However, you can change
 
 "operator" can be set to "or" or "and".
 
+The `boost` modifier can also be applied. It raises the word [IDF](../../Searching/Options.md#idf)_score by the indicated factor in ranking scores that incorporate IDF into their calculations. It does not impact the matching process in any manner.
+```json
+"query":
+{
+  "match":
+  {
+    "field1":
+    {
+      "query": "keyword",
+      "boost": 2.0
+    }
+  }
+}
+```
+
 ### match_phrase
 
 "match_phrase" is a query that matches the entire phrase. It is similar to a phrase operator in SQL. Here's an example:
@@ -118,10 +137,21 @@ By default, keywords are combined using the OR operator. However, you can change
 }
 ```
 
+### match_all
+
+"match_all" accepts an empty object and returns documents from the table without performing any attribute filtering or full-text matching. Alternatively, you can just omit the `query` clause in the request which will have the same effect.
+
+```json
+"query":
+{
+  "match_all": {}
+}
+```
+
 
 ### Combining full-text filtering with other filters
 
-All full-text match clauses can be combined with [must](../../Searching/Filters.md#must), [must_not](../../Searching/Filters.md#must_not), and [should](../../Searching/Filters.md#should) operators of an [HTTP `bool` query](../../Searching/Filters.md#bool-query).
+All full-text match clauses can be combined with [must](../../Searching/Filters.md#must), [must_not](../../Searching/Filters.md#must_not), and [should](../../Searching/Filters.md#should) operators of a [JSON `bool` query](../../Searching/Filters.md#bool-query).
 
 <!-- intro -->
 Examples:
@@ -131,8 +161,8 @@ Examples:
 ```json
 POST /search
 -d
-'{   
-    "index" : "hn_small",
+'{
+    "table" : "hn_small",
     "query":
     {
         "match":
@@ -153,7 +183,7 @@ POST /search
    "hits" : {
       "hits" : [
          {
-            "_id" : "668018",
+            "_id": 668018,
             "_score" : 3579,
             "_source" : {
                "story_author" : "IgorPartola",
@@ -170,8 +200,8 @@ POST /search
 ```json
 POST /search
 -d
-'{   
-    "index" : "hn_small",
+'{
+    "table" : "hn_small",
     "query":
     {
         "match_phrase":
@@ -191,7 +221,7 @@ POST /search
    "hits" : {
       "hits" : [
          {
-            "_id" : "807160",
+            "_id": 807160,
             "_score" : 2599,
             "_source" : {
                "story_author" : "rbanffy",
@@ -209,7 +239,7 @@ POST /search
 ```json
 POST /search
 -d
-'{   "index" : "hn_small",
+'{   "table" : "hn_small",
     "query":
     {
         "query_string": "@comment_text \"find joe fast \"/2"
@@ -226,7 +256,7 @@ POST /search
   "hits" : {
       "hits" : [
          {
-            "_id" : "807160",
+            "_id": 807160,
             "_score" : 2566,
             "_source" : {
                "story_author" : "rbanffy",
@@ -268,7 +298,7 @@ Python
 <!-- request Python -->
 
 ```python
-searchApi.search({"index":"hn_small","query":{"query_string":"@comment_text \"find joe fast \"/2"}, "_source": ["story_author","comment_author"], "limit":1})
+searchApi.search({"table":"hn_small","query":{"query_string":"@comment_text \"find joe fast \"/2"}, "_source": ["story_author","comment_author"], "limit":1})
 ```
 <!-- response Python -->
 ``` python
@@ -291,7 +321,7 @@ javascript
 <!-- request javascript -->
 
 ```javascript
-res = await searchApi.search({"index":"hn_small","query":{"query_string":"@comment_text \"find joe fast \"/2"}, "_source": ["story_author","comment_author"], "limit":1});
+res = await searchApi.search({"table":"hn_small","query":{"query_string":"@comment_text \"find joe fast \"/2"}, "_source": ["story_author","comment_author"], "limit":1});
 ```
 <!-- response javascript -->
 ```javascript
@@ -370,6 +400,70 @@ class SearchResponse {
     }
     profile: null
     warning: null
+}
+```
+
+<!-- intro -->
+TypeScript
+<!-- request TypeScript -->
+
+```typescript
+res = await searchApi.search({
+  index: 'test',
+  query: { query_string: "test document 1" },
+  "_source": ["content", "title"],
+  limit: 1
+});
+```
+<!-- response TypeScript -->
+```json
+{
+  took: 1,
+  timed_out: false,
+  hits:
+   exports {
+     total: 5,
+     total_relation: 'eq',
+     hits:
+      [ { _id: '1',
+          _score: 2566,
+          _source: { content: 'This is a test document 1', title: 'Doc 1' }
+        }
+      ]
+   }
+}
+```
+
+<!-- intro -->
+Go
+<!-- request Go -->
+
+```go
+searchRequest := manticoresearch.NewSearchRequest("test")
+query := map[string]interface{} {"query_string": "test document 1"}
+searchReq.SetSource([]string{"content", "title"})
+searchReq.SetLimit(1)
+resp, httpRes, err := search.SearchRequest(*searchRequest).Execute()
+```
+<!-- response Go -->
+```json
+{
+  "hits": {
+    "hits": [
+      {
+        "_id": 1,
+        "_score": 2566,
+        "_source": {
+          "content": "This is a test document 1",
+          "title": "Doc 1"
+        }
+      }
+    ],
+    "total": 5,
+    "total_relation": "eq"
+  },
+  "timed_out": false,
+  "took": 0
 }
 ```
 <!-- end -->

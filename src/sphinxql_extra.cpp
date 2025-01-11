@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2021-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -78,12 +78,15 @@ public:
 	}
 };
 
-#define YYSTYPE SqlNode_t
+using YYSTYPE = SqlNode_t;
+STATIC_ASSERT ( IS_TRIVIALLY_COPYABLE ( SqlNode_t ), YYSTYPE_MUST_BE_TRIVIAL_FOR_RESIZABLE_PARSER_STACK );
+# define YYSTYPE_IS_TRIVIAL 1
+# define YYSTYPE_IS_DECLARED 1
 
 // unused parameter, simply to avoid type clash between all my yylex() functions
 #define YY_DECL inline int flex_extraparser ( YYSTYPE* lvalp, void* yyscanner, SqlExtraParser_c* pParser )
 
-#include "flexsphinxqlextra.c"
+#include "flexsphinxql_extra.c"
 
 static void yyerror ( SqlParserTraits_c* pParser, const char* szMessage )
 {

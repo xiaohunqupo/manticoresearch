@@ -19,7 +19,6 @@ jobs:
     steps:
       - run: |
           echo "# Coverage tests of commit ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
           echo "* Commit URL: [${{ github.sha }}](/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
           echo "* Initiated by: [@${{ github.actor }}](https://github.com/${{ github.actor }})" >> $GITHUB_STEP_SUMMARY
           echo "* Ref: ${{ github.ref_type }} \"${{ github.ref_name }}\"" >> $GITHUB_STEP_SUMMARY
@@ -37,7 +36,7 @@ jobs:
     needs: simple_build
     uses: ./.github/workflows/test_template.yml
     with:
-      CTEST_CONFIGURATION_TYPE: Debug
       WITH_COVERAGE: 1
       artifact_name: test_debug_coverage
+      build_artifact_name: build_jammy_Debug_x86_64
       timeout: 20

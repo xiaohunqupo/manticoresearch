@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2019-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -15,6 +15,7 @@
 #include "configuration.h"
 #include "searchdaemon.h"
 #include "coroutine.h"
+#include "api_command_cluster.h"
 
 StrVec_t ParseNodesFromString ( CSphString sNodes )
 {
@@ -59,7 +60,7 @@ CSphString GetStringAddr ( const ListenerDesc_t& tListen )
 template<Resolve_e> struct Wait_T
 {
 	inline static constexpr int m_dMultipliers[] { 1, 1, 1 };
-	inline static constexpr int m_iTimeoutMs = g_iAnyNodesTimeoutMs;
+	inline static int m_iTimeoutMs = ReplicationTimeoutAnyNode();
 	inline static constexpr int m_iMultipliers = sizeof ( m_dMultipliers ) / sizeof ( int );
 };
 
@@ -67,7 +68,7 @@ template<>
 struct Wait_T<Resolve_e::SLOW>
 {
 	inline static constexpr int m_dMultipliers[] { 1, 2, 2, 3, 3, 4, 4, 6, 6, 10, 10, 20, 30, 40, 50, 60, 70, 100, 100, 100 };
-	inline static constexpr int m_iTimeoutMs = g_iNodeRetryWaitMs;
+	inline static int m_iTimeoutMs = ReplicationFileRetryDelay();
 	inline static constexpr int m_iMultipliers = sizeof ( m_dMultipliers ) / sizeof ( int );
 };
 
@@ -76,9 +77,9 @@ template<typename PROC, Resolve_e EWAIT>
 class ISphDescIterator_T : public PROC, public Wait_T<EWAIT>
 {
 public:
-    template<typename... V>
-    explicit ISphDescIterator_T ( V&&... tVargs ) : PROC { std::forward<V> ( tVargs )... }
-    {}
+	template<typename... V>
+	explicit ISphDescIterator_T ( V&&... tVargs ) : PROC { std::forward<V> ( tVargs )... }
+	{}
 
 	bool ProcessNodes ( const VecTraits_T<CSphString>& dNodes )
 	{
@@ -87,20 +88,21 @@ public:
 
 		int64_t tmStart = sphMicroTimer();
 
-		if ( dNodes.all_of ( [this] ( const auto& sNode ) { return PROC::SetNode ( sNode.cstr() ); } ) )
-			return true;
-
 		int iRetry = 0;
 		for ( int iMultiplier : Wait_T<EWAIT>::m_dMultipliers )
 		{
+			if ( dNodes.all_of ( [this] ( const auto& sNode ) { return PROC::SetNode ( sNode.cstr() ); } ) )
+				break;
+
 			++iRetry;
+			sphLogDebugRpl ( "retry %d, wait %.3f sec; error: %s", iRetry, ( Wait_T<EWAIT>::m_iTimeoutMs * iMultiplier ) / 1000.0f, TlsMsg::szError() );
+			if ( sphInterrupted() )
+				return false;
+
 			PROC::ResetNodes();
 			TlsMsg::ResetErr();
 			// should wait and retry for DNS set
 			Threads::Coro::SleepMsec ( Wait_T<EWAIT>::m_iTimeoutMs * iMultiplier );
-
-			if ( dNodes.all_of ( [this] ( const auto& sNode ) { return PROC::SetNode ( sNode.cstr() ); } ) )
-				return true;
 		}
 
 		return PROC::IsValid() || TlsMsg::Err ( "%s; in %d retries within %.3f sec", TlsMsg::szError(), iRetry, ( sphMicroTimer() - tmStart ) / 1000000.0f );
@@ -120,6 +122,7 @@ public:
 class AgentDescIterator_c
 {
 	VecAgentDesc_t& m_dNodes;
+	bool m_bValid = true;
 
 public:
 
@@ -127,9 +130,13 @@ public:
 		: m_dNodes { dNodes }
 	{}
 
-	[[nodiscard]] bool IsValid() const noexcept { return !m_dNodes.IsEmpty(); }
+	[[nodiscard]] bool IsValid() const noexcept { return m_bValid; }
 
-	void ResetNodes() { m_dNodes.Reset(); }
+	void ResetNodes()
+	{
+		m_dNodes.Reset();
+		m_bValid = true;
+	}
 
 	bool SetNode ( const CSphString& sNode )
 	{
@@ -140,13 +147,16 @@ public:
 		TLS_MSG_STRING ( sError );
 		ListenerDesc_t tListen = ParseListener ( sNode.cstr(), &sError );
 
-		if ( tListen.m_eProto == Proto_e::UNKNOWN )
+		if ( tListen.m_eProto==Proto_e::UNKNOWN )
+		{
+			m_bValid = false;
 			return false;
+		}
 
-		if ( tListen.m_eProto != Proto_e::SPHINX )
+		if ( tListen.m_eProto!=Proto_e::SPHINX )
 			return true;
 
-		if ( tListen.m_uIP == 0 )
+		if ( tListen.m_uIP==0 )
 			return true;
 
 		AgentDesc_t& tDesc = m_dNodes.Add();

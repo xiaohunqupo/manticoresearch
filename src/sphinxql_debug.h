@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2021-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -12,7 +12,8 @@
 
 #pragma once
 
-#include "sphinxstd.h"
+#include "std/ints.h"
+#include "std/string.h"
 #include "searchdsql.h"
 
 namespace DebugCmd {
@@ -35,12 +36,14 @@ enum class Cmd_e : BYTE
 	FILES,
 	CLOSE,
 	COMPRESS,
+	DEDUP,
 	SPLIT,
 	WAIT,
 	WAIT_STATUS,
 	META,
 	TRACE,
 	CURL,
+	PAUSE,
 
 	INVALID_CMD,
 	PARSE_SYNTAX_ERROR,
@@ -62,24 +65,6 @@ struct DebugCommand_t
 	CSphString sOpt ( const char * szName, const char* szDefault = nullptr ) const;
 	[[nodiscard]] inline bool Valid() const noexcept { return m_eCommand != Cmd_e::PARSE_SYNTAX_ERROR; };
 };
-
-enum Traits_e : BYTE
-{
-	NONE = 0,
-	NEED_VIP = 1,
-	NO_WIN = 2,
-	MALLOC_STATS = 4,
-	MALLOC_TRIM = 8,
-};
-
-struct CmdNotice_t
-{
-	BYTE m_uTraits;
-	const char * m_szExample;
-	const char * m_szExplanation;
-};
-
-extern CmdNotice_t dCommands[(BYTE) Cmd_e::INVALID_CMD];
 
 } // namespace DebugCmd;
 

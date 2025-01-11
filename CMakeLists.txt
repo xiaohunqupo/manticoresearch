@@ -188,7 +188,8 @@ if (CMAKE_CROSSCOMPILING)
 	if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(i.86|x86(_64)?)$"
 			OR CMAKE_SYSTEM_PROCESSOR STREQUAL amd64
 			OR CMAKE_SYSTEM_PROCESSOR STREQUAL arm64
-			OR CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
+			OR CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64
+			OR CMAKE_SYSTEM_PROCESSOR STREQUAL s390x)
 		set ( UNALIGNED_RAM_ACCESS_EXITCODE "0" CACHE STRING "Result from TRY_RUN" )
 		set ( UNALIGNED_RAM_ACCESS_EXITCODE__TRYRUN_OUTPUT "" CACHE STRING "Output from TRY_RUN" )
 	endif ()
@@ -232,6 +233,14 @@ if (STATIC_BINARY)
 endif ()
 with_get ( icu "ICU" "International Components for Unicode" )
 
+include ( GetCCTZ )
+target_link_libraries ( lextra INTERFACE cctz::cctz )
+
+include ( GetxxHash )
+target_link_libraries ( lextra INTERFACE xxHash::xxhash )
+
+with_get ( jieba "Jieba" "Chinese text segmentation tool" )
+
 # Support for OpenSSL
 with_menu_comp ( OpenSSL SSL "OpenSSL" "for encrypted networking" )
 win_install_c ( OpenSSL SSL daemon )
@@ -240,6 +249,7 @@ trace ( OpenSSL::Crypto )
 
 # Support for ZLIB
 with_menu ( ZLIB "zlib" "for compressed data and networking" )
+win_install ( ZLIB common )
 
 with_menu ( ZSTD "libzstd" "for compressed networking" )
 dl_package ( ZSTD "zstd" )
@@ -311,11 +321,14 @@ diag ( OS_UNAME )
 
 diag ( SPLIT )
 
-configure_file ( "COPYING" "${MANTICORE_BINARY_DIR}/COPYING.txt" COPYONLY )
+configure_file ( "LICENSE" "${MANTICORE_BINARY_DIR}/LICENSE" COPYONLY )
 
 # Common all-packages info
 include ( ${MANTICORE_SOURCE_DIR}/sphinxrev.cmake )
 include ( CommonInfo )
+
+include( builds/VersionDeps )
+message("EXECUTOR image: manticoresearch/manticore-executor:${EXECUTOR_VERNUM}")
 
 # set final paths for build
 set ( only_set_paths ON )
@@ -332,7 +345,7 @@ if (NOT installed) # GNUInstallDirs wasn't yet included...
 		install ( DIRECTORY api doc contrib DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT common )
 		install ( FILES example.sql DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT tools )
 		install ( DIRECTORY misc/stopwords DESTINATION ${CMAKE_INSTALL_DATADIR} COMPONENT common )
-		install ( FILES COPYING INSTALL manticore.conf.in DESTINATION . COMPONENT common )
+		install ( FILES LICENSE INSTALL manticore.conf.in DESTINATION . COMPONENT common )
 		install ( DIRECTORY DESTINATION ${CMAKE_INSTALL_LOCALSTATEDIR}/log COMPONENT searchd )
 		install ( DIRECTORY DESTINATION ${CMAKE_INSTALL_LOCALSTATEDIR} COMPONENT common )
 		if (WITH_ICU AND WITH_ICU_FORCE_STATIC)
@@ -403,6 +416,10 @@ cpack_add_component_group ( helpers EXPANDED )
 if (WITH_ICU)
 	cpack_add_component ( icudata )
 endif ()
+
+#if (WITH_JIEBA)
+#	cpack_add_component ( jiebadicts )
+#endif ()
 
 if (WIN32)
 	cpack_add_component ( runtime GROUP main )

@@ -56,7 +56,7 @@ jobs:
           key: build_windows_x64
       - name: Copy libraries close to the binaries
         run: |
-          cp bundle/mysql-x64/lib/debug/libmysql* build/src/Debug/
+          cp bundle/mysql-x64/lib/libmysql* build/src/Debug/
           cp bundle/Expat-1.95.8-x64/Libs/libexpat* build/src/Debug/
           cp bundle/libiconv-1.9.1-x64/lib/iconv* build/src/Debug/
       - name: Setup Flex and Bison
@@ -79,7 +79,7 @@ jobs:
         id: test
         # --timeout may be not working https://gitlab.kitware.com/cmake/cmake/-/issues/23979
         # Add -VV to ctest to display extra debug info
-        run: ctest -V -S misc/ctest/gltest.cmake --no-compress-output --timeout 60
+        run: ctest -V -S misc/ctest/gltest.cmake --no-compress-output --timeout 600
         continue-on-error: true
       - name: Remember status
         if: always()

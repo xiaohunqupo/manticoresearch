@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2011-2016, Andrew Aksyonoff
 // Copyright (c) 2011-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -169,6 +169,74 @@ int JsonUnescape ( char * pTarget, const char * pEscaped, int iLen )
 		s += iChunk;
 	}
 	return int ( d - pTarget );
+}
+
+
+CSphString FormatJsonAsSortStr ( const BYTE * pVal, ESphJsonType eJson )
+{
+	if ( !pVal )
+		return "";
+
+	CSphString sVal;
+
+	// FIXME!!! make string length configurable for STRING and STRING_VECTOR to compare and allocate only Min(String.Length, CMP_LENGTH)
+	switch ( eJson )
+	{
+	case JSON_INT32:
+		sVal.SetSprintf ( "%d", sphJsonLoadInt ( &pVal ) );
+		break;
+	case JSON_INT64:
+		sVal.SetSprintf ( INT64_FMT, sphJsonLoadBigint ( &pVal ) );
+		break;
+	case JSON_DOUBLE:
+		sVal.SetSprintf ( "%f", sphQW2D ( sphJsonLoadBigint ( &pVal ) ) );
+		break;
+	case JSON_STRING:
+	{
+		int iLen = sphJsonUnpackInt ( &pVal );
+		sVal.SetBinary ( (const char *)pVal, iLen );
+		break;
+	}
+	case JSON_STRING_VECTOR:
+	{
+		int iTotalLen = sphJsonUnpackInt ( &pVal );
+		int iCount = sphJsonUnpackInt ( &pVal );
+
+		CSphFixedVector<BYTE> dBuf ( iTotalLen + 4 + iCount ); // data and tail GAP and space count
+		BYTE * pDst = dBuf.Begin();
+
+		// head element
+		if ( iCount )
+		{
+			int iElemLen = sphJsonUnpackInt ( &pVal );
+			memcpy ( pDst, pVal, iElemLen );
+			pDst += iElemLen;
+			pVal += iElemLen;
+		}
+
+		// tail elements separated by space
+		for ( int i=1; i<iCount; i++ )
+		{
+			*pDst++ = ' ';
+			int iElemLen = sphJsonUnpackInt ( &pVal );
+			memcpy ( pDst, pVal, iElemLen );
+			pDst += iElemLen;
+			pVal += iElemLen;
+		}
+
+		// filling junk space
+		while ( pDst<dBuf.Begin()+dBuf.GetLength() )
+			*pDst++ = '\0';
+
+		auto szValue = (char*)dBuf.LeakData();
+		sVal.Adopt ( &szValue );
+		break;
+	}
+	default:
+		break;
+	}
+
+	return sVal;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1264,13 +1332,9 @@ const BYTE * sphJsonFieldFormat ( JsonEscapedBuilder & sOut, const BYTE * pData,
 }
 
 
-bool sphJsonNameSplit ( const char * sName, CSphString * sColumn )
+static bool FindNextSeparator ( const char * & pSep )
 {
-	if ( !sName )
-		return false;
-
 	// find either '[' or '.', what comes first
-	const char * pSep = sName;
 	while ( *pSep && *pSep!='.' && *pSep!='[' )
 	{
 		// check for invalid characters
@@ -1279,15 +1343,33 @@ bool sphJsonNameSplit ( const char * sName, CSphString * sColumn )
 		++pSep;
 	}
 
-	if ( !*pSep )
+	return *pSep;
+}
+
+
+bool sphJsonNameSplit ( const char * szName, const char * szIndex, CSphString * pColumn )
+{
+	if ( !szName )
 		return false;
 
-	int iSep = int ( pSep - sName );
-	if ( sColumn )
+	const char * pSep = szName;
+	if ( !FindNextSeparator(pSep) )
+		return false;
+
+	if ( szIndex && *pSep=='.' && !strncmp ( szIndex, szName, pSep - szName ) )
 	{
-		sColumn->SetBinary ( sName, iSep );
-		sColumn->Trim();
+		// this was not a json separator, but a dot between table name and column name
+		pSep++;
+		if ( !FindNextSeparator(pSep) )
+			return false;
 	}
+
+	if ( pColumn )
+	{
+		pColumn->SetBinary ( szName, pSep-szName );
+		pColumn->Trim();
+	}
+
 	return true;
 }
 
@@ -1577,6 +1659,13 @@ void JsonObj_c::AddUint ( const char * szName, uint64_t uValue )
 }
 
 
+void JsonObj_c::AddFlt ( const char * szName, double fValue )
+{
+	assert ( m_pRoot );
+	cJSON_AddItemToObject ( m_pRoot, szName, CreateDouble(fValue).Leak() );
+}
+
+
 void JsonObj_c::AddBool ( const char * szName, bool bValue )
 {
 	assert ( m_pRoot );
@@ -1719,14 +1808,29 @@ JsonObj_c JsonObj_c::GetIntItem ( const char * szName1, const char * szName2, CS
 
 
 JsonObj_c JsonObj_c::GetBoolItem ( const char * szName, CSphString & sError, bool bIgnoreMissing ) const
+ {
+ 	JsonObj_c tChild = GetChild ( szName, sError, bIgnoreMissing );
+ 	if ( !tChild )
+ 		return JsonNull;
+ 
+	if ( !tChild.IsBool() )
+ 	{
+		sError.SetSprintf ( R"("%s" property value should be a boolean)", szName );
+ 		return JsonNull;
+ 	}
+	return tChild;
+}
+
+
+JsonObj_c JsonObj_c::GetFltItem ( const char * szName, CSphString & sError, bool bIgnoreMissing ) const
 {
 	JsonObj_c tChild = GetChild ( szName, sError, bIgnoreMissing );
 	if ( !tChild )
 		return JsonNull;
 
-	if ( !tChild.IsBool() )
+	if ( !tChild.IsNum() )
 	{
-		sError.SetSprintf ( R"("%s" property value should be a boolean)", szName );
+		sError.SetSprintf ( R"("%s" property value should be numeric)", szName );
 		return JsonNull;
 	}
 
@@ -1815,11 +1919,35 @@ bool JsonObj_c::FetchIntItem ( int & iValue, const char * szName, CSphString & s
 }
 
 
+bool JsonObj_c::FetchInt64Item ( int64_t & iValue, const char * szName, CSphString & sError, bool bIgnoreMissing ) const
+{
+	JsonObj_c tItem = GetIntItem ( szName, sError, bIgnoreMissing );
+	if ( tItem )
+		iValue = tItem.IntVal();
+	else if ( !sError.IsEmpty() )
+		return false;
+
+	return true;
+}
+
+
 bool JsonObj_c::FetchBoolItem ( bool & bValue, const char * szName, CSphString & sError, bool bIgnoreMissing ) const
 {
 	JsonObj_c tItem = GetBoolItem ( szName, sError, bIgnoreMissing );
 	if ( tItem )
 		bValue = tItem.BoolVal();
+	else if ( !sError.IsEmpty() )
+		return false;
+
+	return true;
+}
+
+
+bool JsonObj_c::FetchFltItem ( float & fValue, const char * szName, CSphString & sError, bool bIgnoreMissing ) const
+{
+	JsonObj_c tItem = GetBoolItem ( szName, sError, bIgnoreMissing );
+	if ( tItem )
+		fValue = tItem.FltVal();
 	else if ( !sError.IsEmpty() )
 		return false;
 
@@ -1855,6 +1983,12 @@ JsonObj_c JsonObj_c::CreateInt ( int64_t iInt )
 JsonObj_c JsonObj_c::CreateUint ( uint64_t uInt )
 {
 	return JsonObj_c ( cJSON_CreateUInteger(uInt) );
+}
+
+
+JsonObj_c JsonObj_c::CreateDouble ( double fValue )
+{
+	return JsonObj_c ( cJSON_CreateNumber(fValue) );
 }
 
 
@@ -1976,7 +2110,7 @@ JsonObj_c JsonObj_c::GetChild ( const char * szName, CSphString & sError, bool b
 }
 
 
-cJSON * JsonObj_c::GetRoot()
+cJSON * JsonObj_c::GetRoot() const
 {
 	return m_pRoot;
 }
@@ -2044,6 +2178,38 @@ JsonObj_c JsonObj_c::Clone () const
 
 	JsonObj_c tNew ( cJSON_Duplicate ( m_pRoot, true ) );
 	return tNew;
+}
+
+const char * JsonObj_c::TypeName() const
+{
+	if ( !m_pRoot )
+		return "invalid";
+
+    switch ( m_pRoot->type & 0xFF )
+    {
+        case cJSON_False:
+        case cJSON_True:
+			return "bool";
+        case cJSON_NULL:
+			return "null";
+        case cJSON_Number:
+			return "double";
+        case cJSON_Integer:
+			return "integet";
+        case cJSON_UInteger:
+			return "unsigned";
+        case cJSON_String:
+			return "string";
+        case cJSON_Raw:
+			return "raw";
+        case cJSON_Array:
+			return "array";
+        case cJSON_Object:
+			return "object";
+
+        default:
+            return "invalid";
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////

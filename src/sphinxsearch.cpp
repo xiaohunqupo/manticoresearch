@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -12,7 +12,7 @@
 
 #include "sphinxsearch.h"
 #include "searchnode.h"
-#include "sphinxint.h"
+#include "querycontext.h"
 #include "sphinxplugin.h"
 #include "sphinxqcache.h"
 #include "attribute.h"
@@ -284,7 +284,7 @@ public:
 
 	bool InitState ( const CSphQueryContext & tCtx, CSphString & sError ) override
 	{
-		return m_tState.Init ( tCtx.m_iWeights, &tCtx.m_dWeights[0], this, sError, tCtx.m_uPackedFactorFlags );
+		return m_tState.Init ( tCtx.m_iWeights, &tCtx.m_dWeights[0], this, sError, tCtx.GetPackedFactor() );
 	}
 
 	// FIXME! add specific costs for different rankers
@@ -547,7 +547,7 @@ void CreateKeywordBson ( bson::Assoc_c& tWord, const XQKeyword_t & tKeyword )
 		tWord.AddDouble ( SZ_BOOST, tKeyword.m_fBoost );
 }
 
-void BuildProfileBson ( bson::Assoc_c& tPlan, const XQNode_t * pNode, const CSphSchema & tSchema, const StrVec_t & dZones )
+void BuildPlanBson ( bson::Assoc_c& tPlan, const XQNode_t * pNode, const CSphSchema & tSchema, const StrVec_t & dZones )
 {
 	using namespace bson;
 	tPlan.AddString ( SZ_TYPE, sphXQNodeToStr ( pNode ).cstr() );
@@ -571,7 +571,7 @@ void BuildProfileBson ( bson::Assoc_c& tPlan, const XQNode_t * pNode, const CSph
 		for ( const auto & i : pNode->m_dChildren )
 		{
 			Obj_c tChild ( dChildren.StartObj () );
-			BuildProfileBson ( tChild, i, tSchema, dZones );
+			BuildPlanBson ( tChild, i, tSchema, dZones );
 		}
 	}
 }
@@ -604,17 +604,21 @@ CSphString sph::RenderBsonPlanBrief ( const bson::NodeHandle_t& dBson )
 Bson_t sphExplainQuery ( const XQNode_t * pNode, const CSphSchema & tSchema, const StrVec_t & dZones )
 {
 	CSphVector<BYTE> dPlan;
-	bson::Root_c tPlan ( dPlan );
-	::BuildProfileBson ( tPlan, pNode, tSchema, dZones );
+	{
+		bson::Root_c tPlan ( dPlan );
+		::BuildPlanBson ( tPlan, pNode, tSchema, dZones );
+	}
 	return dPlan;
 }
 
 
 void QueryProfile_c::BuildResult ( XQNode_t * pRoot, const CSphSchema & tSchema, const StrVec_t & dZones )
 {
+	if ( m_eNeedPlan == PLAN_FLAVOUR::ENONE )
+		return;
 	m_dPlan.Reset();
 	bson::Root_c tPlan ( m_dPlan );
-	::BuildProfileBson ( tPlan, pRoot, tSchema, dZones );
+	::BuildPlanBson ( tPlan, pRoot, tSchema, dZones );
 }
 
 ExtRanker_c::ExtRanker_c ( const XQQuery_t & tXQ, const ISphQwordSetup & tSetup, const RankerSettings_t & tSettings, bool bUseBM25 )
@@ -642,7 +646,7 @@ ExtRanker_c::ExtRanker_c ( const XQQuery_t & tXQ, const ISphQwordSetup & tSetup,
 
 	// we generally have three (!) trees for each query
 	// 1) parsed tree, a raw result of query parsing
-	// 2) transformed tree, with star expansions, morphology, and other transfomations
+	// 2) transformed tree, with star expansions, morphology, and other transformations
 	// 3) evaluation tree, with tiny keywords cache, and other optimizations
 	// tXQ.m_pRoot, passed to ranker from the index, is the transformed tree
 	// m_pRoot, internal to ranker, is the evaluation tree
@@ -1065,13 +1069,13 @@ SphZoneHit_e ExtRanker_c::IsInZone ( int iZone, const ExtHit_t * pHit, int * pLa
 				while ( bEofDoc!=3 ) /// action end-of-doc
 				{
 					// action inspan/start-marker
-					if ( bInSpan )
+					if ( bInSpan || ( bEofDoc & 2 ) )
 					{
 						++pStartHits;
 						bEofDoc |= (pStartHits->m_tRowID!=tCurRowID)?1:0;
 					} else
-						// action outspan/end-marker
 					{
+						// action outspan/end-marker
 						++pEndHits;
 						bEofDoc |= (pEndHits->m_tRowID!=tCurRowID)?2:0;
 					}
@@ -1101,6 +1105,15 @@ SphZoneHit_e ExtRanker_c::IsInZone ( int iZone, const ExtHit_t * pHit, int * pLa
 					pZone->m_dStarts.Add ( iSpanBegin );
 					pZone->m_dEnds.Add ( iSpanEnd );
 				}
+			}
+
+			// skip to the same doc
+			while ( pStartHits->m_tRowID!=INVALID_ROWID && pEndHits->m_tRowID!=INVALID_ROWID && pStartHits->m_tRowID!=pEndHits->m_tRowID )
+			{
+				while ( pStartHits->m_tRowID!=INVALID_ROWID && pEndHits->m_tRowID!=INVALID_ROWID && pStartHits->m_tRowID<pEndHits->m_tRowID )
+					pStartHits++;
+				while ( pStartHits->m_tRowID!=INVALID_ROWID && pEndHits->m_tRowID!=INVALID_ROWID && pEndHits->m_tRowID<pStartHits->m_tRowID )
+					pEndHits++;
 			}
 
 			// data sanity checks
@@ -3460,7 +3473,7 @@ bool RankerState_Expr_fn<NEED_PACKEDFACTORS, HANDLE_DUPES>::Init ( int iFields, 
 	tExprArgs.m_pUsesWeight = &bUsesWeight;
 	tExprArgs.m_pHook = &tHook;
 
-	m_pExpr = sphExprParse ( m_sExpr, *m_pSchema, sError, tExprArgs ); // FIXME!!! profile UDF here too
+	m_pExpr = sphExprParse ( m_sExpr, *m_pSchema, nullptr, sError, tExprArgs ); // FIXME!!! profile UDF here too
 	if ( !m_pExpr )
 		return false;
 	if ( m_eExprType!=SPH_ATTR_INTEGER && m_eExprType!=SPH_ATTR_FLOAT )
@@ -4494,7 +4507,7 @@ std::unique_ptr<ISphRanker> sphCreateRanker ( const XQQuery_t & tXQ, const CSphQ
 				// however ranker expression got parsed later at Init stage
 				// FIXME!!! move QposMask initialization past Init
 				tTermSetup.m_bSetQposMask = true;
-				bool bNeedFactors = !!(tCtx.m_uPackedFactorFlags & SPH_FACTOR_ENABLE);
+				bool bNeedFactors = !!( tCtx.GetPackedFactor() & SPH_FACTOR_ENABLE );
 				if ( bNeedFactors && bGotDupes )
 					pRanker = std::make_unique < ExtRanker_Expr_T <true, true>> ( tXQ, tTermSetup, tQuery.m_sRankerExpr.cstr(), pIndex->GetMatchSchema(), tRankerSettings );
 				else if ( bNeedFactors && !bGotDupes )
@@ -4546,6 +4559,9 @@ std::unique_ptr<ISphRanker> sphCreateRanker ( const XQQuery_t & tXQ, const CSphQ
 	}
 	assert ( pRanker );
 	pRanker->m_uPayloadMask = uPayloadMask;
+
+	if ( tQuery.m_bGlobalIDF && !pIndex->HasGlobalIDF() )
+		tMeta.m_sWarning.SetSprintf ( "query sets global_idf, but global_idf is missing from the index" );
 
 	// setup IDFs
 	ExtQwordsHash_t hQwords;

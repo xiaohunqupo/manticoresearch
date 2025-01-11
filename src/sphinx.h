@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <optional>
 
 #if _WIN32
 #include <winsock2.h>
@@ -301,35 +302,38 @@ struct RowTagged_t
 // defined in stripper/html_stripper.h
 class CSphHTMLStripper;
 
+struct FieldFilterOptions_t
+{
+	JiebaMode_e	m_eJiebaMode = JiebaMode_e::NONE;
+};
+
 /// field filter
 class ISphFieldFilter
 {
 public:
-	virtual						~ISphFieldFilter() = default;
+	virtual			~ISphFieldFilter() = default;
 
-	virtual	int					Apply ( const BYTE * sField, int iLength, CSphVector<BYTE> & dStorage, bool bQuery ) = 0;
-	int							Apply ( const void* szField, CSphVector<BYTE>& dStorage, bool bQuery )
-	{
-		return Apply ( (const BYTE*)szField, (int) strlen ( (const char*)szField ), dStorage, bQuery );
-	}
+	virtual	int		Apply ( const BYTE * sField, int iLength, CSphVector<BYTE> & dStorage, bool bQuery ) = 0;
+	virtual	void	GetSettings ( CSphFieldFilterSettings & tSettings ) const = 0;
+	virtual std::unique_ptr<ISphFieldFilter> Clone ( const FieldFilterOptions_t * pOptions=nullptr ) const = 0;
 
-	int Apply ( ByteBlob_t sField, CSphVector<BYTE>& dStorage, bool bQuery )
-	{
-		return Apply ( sField.first, sField.second, dStorage, bQuery );
-	}
-	virtual	void				GetSettings ( CSphFieldFilterSettings & tSettings ) const = 0;
-	virtual std::unique_ptr<ISphFieldFilter>	Clone() const = 0;
+	int				Apply ( const void * szField, CSphVector<BYTE> & dStorage, bool bQuery )	{ return Apply ( (const BYTE*)szField, (int) strlen ( (const char*)szField ), dStorage, bQuery ); }
+	int				Apply ( ByteBlob_t sField, CSphVector<BYTE> & dStorage, bool bQuery )		{ return Apply ( sField.first, sField.second, dStorage, bQuery ); }
 };
 
 /// create a regexp field filter
 std::unique_ptr<ISphFieldFilter> sphCreateRegexpFilter ( const CSphFieldFilterSettings & tFilterSettings, CSphString & sError );
 
-/// create an ICU field filter
-std::unique_ptr<ISphFieldFilter> sphCreateFilterICU ( std::unique_ptr<ISphFieldFilter> pParent, const char * szBlendChars, CSphString & sError );
-
 /////////////////////////////////////////////////////////////////////////////
 // SEARCH QUERIES
 /////////////////////////////////////////////////////////////////////////////
+
+enum class EStrCmpDir
+{
+	EQ,
+	LT,
+	GT
+};
 
 /// search query filter
 struct CommonFilterSettings_t
@@ -351,6 +355,7 @@ struct CommonFilterSettings_t
 	bool				m_bOpenLeft = false;
 	bool				m_bOpenRight = false;
 	bool				m_bExclude = false;		///< whether this is "include" or "exclude" filter (default is "include")
+	EStrCmpDir			m_eStrCmpDir = EStrCmpDir::EQ;		///< string comparison direction
 };
 
 
@@ -460,10 +465,44 @@ struct IndexHint_t
 	bool					m_bForce = true;
 };
 
+struct OnFilter_t
+{
+	CSphString	m_sIdx1;
+	CSphString	m_sAttr1;
+	CSphString	m_sIdx2;
+	CSphString	m_sAttr2;
+	ESphAttr	m_eTypeCast1 = SPH_ATTR_NONE;
+	ESphAttr	m_eTypeCast2 = SPH_ATTR_NONE;
+};
+
+enum class JoinType_e
+{
+	NONE,
+	INNER,
+	LEFT
+};
+
 const int DEFAULT_MAX_MATCHES = 1000;
 const int DEFAULT_QUERY_TIMEOUT = 0;
 const int DEFAULT_QUERY_RETRY = -1;
 const int DEFAULT_QUERY_EXPANSION_LIMIT = -1;
+
+struct ScrollAttr_t
+{
+	CSphString	m_sSortAttr;
+	bool		m_bDesc = true;
+	ESphAttr	m_eType = SPH_ATTR_INTEGER;
+	SphAttr_t	m_tValue = 0;
+	float		m_fValue = 0.0f;
+	CSphString	m_sValue;
+};
+
+struct ScrollSettings_t
+{
+	CSphString					m_sSortBy;
+	bool						m_bRequested = true;
+	CSphVector<ScrollAttr_t>	m_dAttrs;
+};
 
 /// search query. Pure struct, no member functions
 struct CSphQuery
@@ -488,7 +527,12 @@ struct CSphQuery
 
 	CSphString		m_sKNNAttr;					///< which attr to use for KNN search (enables KNN if not empty)
 	int				m_iKNNK = 0;				///< KNN K
+	int				m_iKnnEf = 0;				///< KNN ef
 	CSphVector<float> m_dKNNVec;				///< KNN anchor vector
+
+	JiebaMode_e		m_eJiebaMode = JiebaMode_e::NONE;	///< separate optional jieba mode for searches
+
+	ScrollSettings_t m_tScrollSettings;
 
 	bool			m_bSortKbuffer = false;		///< whether to use PQ or K-buffer sorting algorithm
 	bool			m_bZSlist = false;			///< whether the ranker has to fetch the zonespanlist with this query
@@ -496,7 +540,7 @@ struct CSphQuery
 	bool			m_bPlainIDF = false;		///< whether to use PlainIDF=log(N/n) or NormalizedIDF=log((N-n+1)/n)
 	bool			m_bGlobalIDF = false;		///< whether to use local indexes or a global idf file
 	bool			m_bNormalizedTFIDF = true;	///< whether to scale IDFs by query word count, so that TF*IDF is normalized
-	bool			m_bLocalDF = false;			///< whether to use calculate DF among local indexes
+	std::optional<bool> m_bLocalDF;				///< whether to use calculate DF among local indexes
 	bool			m_bLowPriority = false;		///< set low thread priority for this query
 	DWORD			m_uDebugFlags = 0;
 	QueryOption_e	m_eExpandKeywords = QUERY_OPT_DEFAULT;	///< control automatic query-time keyword expansion
@@ -509,11 +553,18 @@ struct CSphQuery
 	bool			m_bExplicitDistinctThresh = false;	///< whether thresh was set via options
 
 	int				m_iMaxMatchThresh = 16384;
+	int				m_iNow = 0;	///< timestamp on query receive for all 'now' expressions to have the same base
 
-	CSphVector<CSphFilterSettings>	m_dFilters;	///< filters
+	CSphVector<CSphFilterSettings>	m_dFilters;		///< filters
 	CSphVector<FilterTreeItem_t>	m_dFilterTree;
 
-	CSphVector<IndexHint_t>			m_dIndexHints; ///< secondary index hints
+	CSphVector<IndexHint_t>			m_dIndexHints;	///< secondary index hints
+
+	JoinType_e		m_eJoinType = JoinType_e::NONE;	///< JOIN type
+	CSphString		m_sJoinIdx;						///< index to perform join on
+	CSphString		m_sJoinQuery;					///< fulltext query for JOIN
+	CSphVector<OnFilter_t> m_dOnFilters;			///< JOIN ON condition filters
+	int				m_iJoinBatchSize = -1;			///< join batch size (-1==default, 0==disable batching)
 
 	CSphString		m_sGroupBy;			///< group-by attribute name(s)
 	CSphString		m_sFacetBy;			///< facet-by attribute name(s)
@@ -592,6 +643,8 @@ struct CSphQuery
 /// parse select list string into items
 bool ParseSelectList ( CSphString &sError, CSphQuery &pResult );
 
+void SetQueryDefaultsExt2 ( CSphQuery & tQuery );
+
 /// some low-level query stats
 struct CSphQueryStats
 {
@@ -620,6 +673,11 @@ struct IteratorStats_t
 	void	Merge ( const IteratorStats_t & tSrc );
 };
 
+struct ExpansionStats_t
+{
+	int m_iTerms = 0;
+	int	m_iMerged = 0;
+};
 
 /// search query meta-info
 class CSphQueryResultMeta
@@ -653,12 +711,15 @@ public:
 	CSphString				m_sError;				///< error message
 	CSphString				m_sWarning;				///< warning message
 	QueryProfile_c *		m_pProfile		= nullptr;	///< filled when query profiling is enabled; NULL otherwise
+	CSphString				m_sScroll;				///< data to continue scroll
 
 	IteratorStats_t			m_tIteratorStats;		///< iterators used while calculating the query
 	bool					m_bBigram = false;		///< whatever to remove bigram symbol on adding word to stat
+	ExpansionStats_t		m_tExpansionStats;		///< full text query statistics for expanded and merged terms
 
 	virtual					~CSphQueryResultMeta () {}					///< dtor
 	void					AddStat ( const CSphString & sWord, int64_t iDocs, int64_t iHits );
+	void					AddStat ( const ExpansionStats_t & tExpansionStats );
 
 	void					MergeWordStats ( const CSphQueryResultMeta& tOther );// sort wordstat to achieve reproducable result over different runs
 	CSphFixedVector<SmallStringHash_T<CSphQueryResultMeta::WordStat_t>::KeyValue_t *>	MakeSortedWordStat () const;
@@ -738,6 +799,8 @@ struct AttrUpdateInc_t // for cascade (incremental) update
 	}
 };
 
+void CommitUpdateAttributes ( int64_t * pTID, const char* szName, const CSphAttrUpdate & tUpd );
+
 /////////////////////////////////////////////////////////////////////////////
 // FULLTEXT INDICES
 /////////////////////////////////////////////////////////////////////////////
@@ -754,6 +817,7 @@ public:
 		E_COLLECT_START,		// begin collecting alive docs on merge; payload is chunk ID
 		E_COLLECT_FINISHED,		// collecting alive docs on merge is finished; payload is chunk ID
 		E_MERGEATTRS_START,
+		E_MERGEATTRS_PULSE,
 		E_MERGEATTRS_FINISHED,
 		E_KEYWORDS,
 		E_FINISHED,
@@ -766,7 +830,7 @@ public:
 
 	virtual void SetEvent ( Event_e eEvent, int64_t iPayload ) {}
 
-	inline bool NeedStop () const
+	inline bool NeedStop () const noexcept
 	{
 		return sphInterrupted() || ( m_pStop && m_pStop->load ( std::memory_order_relaxed ) );
 	}
@@ -787,6 +851,7 @@ public:
 		PHASE_LOOKUP,				///< docid lookup construction
 		PHASE_MERGE,				///< index merging
 		PHASE_SI_BUILD,				///< secondary index build
+		PHASE_JSONSI_BUILD,			///< json secondary index build
 		PHASE_UNKNOWN,
 	};
 
@@ -889,6 +954,8 @@ struct CSphIndexStatus
 	int64_t			m_iSavedTID = 0;
 	int64_t 		m_iDead = 0;
 	double			m_fSaveRateLimit {0.0};	 // not used for plain. Part of m_iMemLimit to be achieved before flushing
+	int 			m_iLockCount = 0;		// not used for plain. N of active locks (i.e. - if N>0, saving is prohibited)
+	int 			m_iOptimizesCount = 0;	// not used for plain. N of currently run optimizes.
 };
 
 
@@ -952,6 +1019,7 @@ private:
 public:
 	virtual int			Kill ( DocID_t  /*tDocID*/ ) { return 0; }
 	virtual int			KillMulti ( const VecTraits_T<DocID_t> &  /*dKlist*/ ) { return 0; };
+	virtual int 		KillDupes () { return 0; }
 	virtual int			CheckThenKillMulti ( const VecTraits_T<DocID_t>& dKlist, BlockerFn&& /*fnWatcher*/ ) { return KillMulti ( dKlist ); };
 	virtual				~IndexSegment_c() = default;
 
@@ -1081,11 +1149,7 @@ struct CSphSourceStats;
 class DebugCheckError_i;
 struct AttrAddRemoveCtx_t;
 class Docstore_i;
-
-namespace SI
-{
-	class Index_i;
-}
+class SIContainer_c;
 
 enum ESphExt : BYTE;
 
@@ -1124,8 +1188,8 @@ public:
 
 	virtual std::pair<int64_t,int> GetPseudoShardingMetric ( const VecTraits_T<const CSphQuery> & dQueries, const VecTraits_T<int64_t> & dMaxCountDistinct, int iThreads, bool & bForceSingleThread ) const { return { 0, 0 }; }
 	virtual bool				MustRunInSingleThread ( const VecTraits_T<const CSphQuery> & dQueries, bool bHasSI, const VecTraits_T<int64_t> & dMaxCountDistinct, bool & bForceSingleThread ) const;
-	virtual int64_t				GetCountDistinct ( const CSphString & sAttr ) const { return -1; }	// returns values if index has some meta on its attributes
-	virtual int64_t				GetCountFilter ( const CSphFilterSettings & tFilter ) const { return -1; }	// returns values if index has some meta on its attributes
+	virtual int64_t				GetCountDistinct ( const CSphString & sAttr, CSphString & sModifiedAttr ) const { return -1; }	// returns values if index has some meta on its attributes
+	virtual int64_t				GetCountFilter ( const CSphFilterSettings & tFilter, CSphString & sModifiedAttr ) const { return -1; }	// returns values if index has some meta on its attributes
 	virtual int64_t				GetCount() const { return -1; }
 
 public:
@@ -1188,9 +1252,11 @@ public:
 	int							UpdateAttributes ( AttrUpdateInc_t & tUpd, bool & bCritical, CSphString & sError, CSphString & sWarning );
 
 	/// update accumulating state
-	virtual int					CheckThenUpdateAttributes ( AttrUpdateInc_t& tUpd, bool& bCritical, CSphString& sError, CSphString& sWarning, BlockerFn&& /*fnWatcher*/ ) = 0;
+	virtual int					CheckThenUpdateAttributes ( AttrUpdateInc_t& tUpd, bool& bCritical, CSphString& sError, CSphString& sWarning ) = 0;
 
-	virtual Binlog::CheckTnxResult_t ReplayTxn ( Binlog::Blop_e eOp, CSphReader & tReader, CSphString & sError, Binlog::CheckTxn_fn&& fnCheck ) = 0;
+	virtual Binlog::CheckTnxResult_t ReplayTxn ( CSphReader & tReader, CSphString & sError, BYTE uOp, Binlog::CheckTxn_fn&& fnCheck ) = 0;
+
+	Binlog::CheckTnxResult_t ReplayUpdate ( CSphReader &, CSphString &, Binlog::CheckTxn_fn && );
 	/// saves memory-cached attributes, if there were any updates to them
 	/// on failure, false is returned and GetLastError() contains error message
 	virtual bool				SaveAttributes ( CSphString & sError ) const = 0;
@@ -1221,10 +1287,10 @@ public:
 	virtual void				DebugDumpHitlist ( FILE * fp, const char * sKeyword, bool bID ) = 0;
 
 	/// internal debugging hook, DO NOT USE
-	virtual void				DebugDumpDict ( FILE * fp ) = 0;
+	virtual void				DebugDumpDict ( FILE * fp, bool bDumpOnly ) = 0;
 
 	/// internal debugging hook, DO NOT USE
-	virtual int					DebugCheck ( DebugCheckError_i& ) = 0;
+	virtual int					DebugCheck ( DebugCheckError_i & , FilenameBuilder_i * ) = 0;
 	virtual void				SetDebugCheck ( bool bCheckIdDups, int iCheckChunk ) {}
 
 	/// getter for name. Notice, const char* returned as it is mostly used for printing name
@@ -1241,19 +1307,16 @@ public:
 
 	virtual void				GetFieldFilterSettings ( CSphFieldFilterSettings & tSettings ) const;
 
-	// put external files (if any) into index folder
-	// copy the rest of the external files to index folder
-	virtual bool				CopyExternalFiles ( int iPostfix, StrVec_t & dCopied ) { return true; }
-
 	// used for query optimizer calibration
 	virtual HistogramContainer_c * Debug_GetHistograms() const { return nullptr; }
-	virtual SI::Index_i *		Debug_GetSI() const { return nullptr; }
+	virtual const SIContainer_c *	Debug_GetSI() const { return nullptr; }
 
 	virtual Docstore_i *			GetDocstore() const { return nullptr; }
 	virtual columnar::Columnar_i *	GetColumnar() const { return nullptr; }
 	virtual const DWORD *			GetRawAttrs() const { return nullptr; }
 	virtual const BYTE *			GetRawBlobAttrs() const { return nullptr; }
 	virtual bool					AlterSI ( CSphString & sError ) { return true; }
+	const CSphBitvec &				GetMorphFields () const { return m_tMorphFields; }
 
 public:
 	int64_t						m_iTID = 0;				///< last committed transaction id
@@ -1284,6 +1347,7 @@ protected:
 	TokenizerRefPtr_c		m_pQueryTokenizer;
 	TokenizerRefPtr_c		m_pQueryTokenizerJson;
 	DictRefPtr_c			m_pDict;
+	CSphBitvec				m_tMorphFields;
 
 	int							m_iMaxCachedDocs = 0;
 	int							m_iMaxCachedHits = 0;
@@ -1292,8 +1356,9 @@ private:
 	CSphString					m_sIndexName;			///< index ID in binlogging; otherwise used only in messages. Use GetName()!
 
 public:
-	void						SetGlobalIDFPath ( const CSphString & sPath ) { m_sGlobalIDFPath = sPath; }
+	virtual void				SetGlobalIDFPath ( const CSphString & sPath ) { m_sGlobalIDFPath = sPath; }
 	float						GetGlobalIDF ( const CSphString & sWord, int64_t iDocsLocal, bool bPlainIDF ) const;
+	bool						HasGlobalIDF () const;
 
 protected:
 	CSphString					m_sGlobalIDFPath;
@@ -1323,8 +1388,8 @@ public:
 	void				GetStatus ( CSphIndexStatus* ) const override {}
 	bool				GetKeywords ( CSphVector <CSphKeywordInfo> & , const char * , const GetKeywordsSettings_t & tSettings, CSphString * ) const override { return false; }
 	bool				FillKeywords ( CSphVector <CSphKeywordInfo> & ) const override { return true; }
-	int					CheckThenUpdateAttributes ( AttrUpdateInc_t&, bool &, CSphString & , CSphString &, BlockerFn&& ) override { return -1; }
-	Binlog::CheckTnxResult_t ReplayTxn ( Binlog::Blop_e, CSphReader &, CSphString &, Binlog::CheckTxn_fn&& ) override { return {}; }
+	int					CheckThenUpdateAttributes ( AttrUpdateInc_t&, bool &, CSphString & , CSphString & ) override { return -1; }
+	Binlog::CheckTnxResult_t ReplayTxn ( CSphReader &, CSphString &, BYTE, Binlog::CheckTxn_fn&& ) override { return {}; }
 	bool				SaveAttributes ( CSphString & ) const override { return true; }
 	DWORD				GetAttributeStatus () const override { return 0; }
 	bool				AddRemoveAttribute ( bool, const AttrAddRemoveCtx_t & tCtx, CSphString & sError ) override { return true; }
@@ -1332,8 +1397,8 @@ public:
 	void				DebugDumpHeader ( FILE *, const CSphString&, bool ) override {}
 	void				DebugDumpDocids ( FILE * ) override {}
 	void				DebugDumpHitlist ( FILE * , const char * , bool ) override {}
-	int					DebugCheck ( DebugCheckError_i& ) override { return 0; }
-	void				DebugDumpDict ( FILE * ) override {}
+	int					DebugCheck ( DebugCheckError_i & , FilenameBuilder_i * ) override { return 0; }
+	void				DebugDumpDict ( FILE *, bool bDumpOnly ) override {}
 	Bson_t				ExplainQuery ( const CSphString & sQuery ) const override { return EmptyBson (); }
 
 	bool				MultiQuery ( CSphQueryResult & , const CSphQuery & , const VecTraits_T<ISphMatchSorter *> &, const CSphMultiQueryArgs & ) const override { return false; }
@@ -1373,12 +1438,13 @@ struct SphQueueSettings_t
 	int							m_iMaxMatches = DEFAULT_MAX_MATCHES;
 	bool						m_bNeedDocids = false;
 	bool						m_bGrouped = false;	// are we going to push already grouped matches to it?
-	std::function<int64_t (const CSphString &)>			m_fnGetCountDistinct;
-	std::function<int64_t (const CSphFilterSettings &)>	m_fnGetCountFilter;
-	std::function<int64_t ()>							m_fnGetCount;
+	std::function<int64_t (const CSphString &, CSphString &)>			m_fnGetCountDistinct;
+	std::function<int64_t (const CSphFilterSettings &, CSphString &)>	m_fnGetCountFilter;
+	std::function<int64_t ()>	m_fnGetCount;
 	bool						m_bEnableFastDistinct = false;
 	bool						m_bForceSingleThread = false;
 	StrVec_t 					m_dCreateSchema;
+	std::unique_ptr<JoinArgs_t>	m_pJoinArgs;
 	RowBuffer_i*				m_pSqlRowBuffer;
 	void **						m_ppOpaque1 = nullptr;
 	void **						m_ppOpaque2 = nullptr;
@@ -1394,9 +1460,10 @@ struct SphQueueSettings_t
 
 struct SphQueueRes_t : public ISphNoncopyable
 {
-	DWORD m_uPackedFactorFlags {SPH_FACTOR_DISABLE};
-	bool						m_bZonespanlist = false;
-	bool						m_bAlowMulti = true;
+	DWORD	m_uPackedFactorFlags = SPH_FACTOR_DISABLE;
+	bool	m_bZonespanlist = false;
+	bool	m_bAlowMulti = true;
+	bool	m_bJoinedGroupSort = false;
 };
 
 /////////////////////////////////////////////////////////////////////////////
@@ -1417,15 +1484,12 @@ void				sphSetJsonOptions ( bool bStrict, bool bAutoconvNumbers, bool bKeynamesT
 void				SetUnhintedBuffer ( int iReadUnhinted );
 int					GetUnhintedBuffer();
 
-/// check query for expressions
-bool				sphHasExpressions ( const CSphQuery & tQuery, const CSphSchema & tSchema );
-
 void				SetPseudoSharding ( bool bSet );
 bool				GetPseudoSharding();
 void				SetPseudoShardingThresh ( int iThresh );
 
-void				InitSkipCache ( int64_t iCacheSize );
-void				ShutdownSkipCache();
+struct BuildBufferSettings_t;
+void				SetMergeSettings ( const BuildBufferSettings_t & tSettings );
 
 //////////////////////////////////////////////////////////////////////////
 
