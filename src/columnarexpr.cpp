@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -181,6 +181,7 @@ uint64_t Expr_Columnar_StringIn_c::GetHash ( const ISphSchema & tSorterSchema, u
 
 Expr_Columnar_StringIn_c::Expr_Columnar_StringIn_c ( const Expr_Columnar_StringIn_c & rhs )
 	: BASE (rhs)
+	, m_sName ( rhs.m_sName )
 	, m_fnHashCalc ( rhs.m_fnHashCalc )
 	, m_dHashes ( rhs.m_dHashes )
 {}

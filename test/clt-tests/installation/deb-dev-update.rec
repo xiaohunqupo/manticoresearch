@@ -1,0 +1,93 @@
+––– input –––
+export PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin
+––– output –––
+––– input –––
+apt-get update -y > /dev/null; echo $?
+––– output –––
+0
+––– input –––
+apt-get install -y gnupg2 wget mariadb-client procps binutils > /dev/null 2>&1; echo $?
+––– output –––
+0
+––– input –––
+wget -q https://repo.manticoresearch.com/manticore-repo.noarch.deb
+––– output –––
+––– input –––
+dpkg -i manticore-repo.noarch.deb > /dev/null; echo $?
+––– output –––
+gpg: key 14D612DB3D2730E2: "Manticore Search <support@manticoresearch.com>" not changed
+gpg: Total number processed: 1
+gpg:              unchanged: 1
+0
+––– input –––
+apt-get update -y > /dev/null; echo $?
+––– output –––
+0
+––– input –––
+apt-get install -y manticore manticore-extra > /dev/null 2>&1; echo $?
+––– output –––
+0
+––– input –––
+searchd --version
+––– output –––
+Manticore %{VERSION} (columnar %{VERSION}) (secondary %{VERSION}) (knn %{VERSION})
+Copyright (c) 2001-2016, Andrew Aksyonoff
+Copyright (c) 2008-2016, Sphinx Technologies Inc (http://sphinxsearch.com)
+Copyright (c) 2017-%{YEAR}, Manticore Software LTD (https://manticoresearch.com)
+––– input –––
+manticore-executor -v
+––– output –––
+PHP %{VERSION} (cli) (built: #!/[a-zA-Z]{3}/!# #!/[0-9]+/!# %{YEAR} %{TIME}) (NTS)
+Copyright (c) The PHP Group
+Zend Engine #!/v[0-9]+\.[0-9]+\.[0-9]+/!#, Copyright (c) Zend Technologies
+––– block: start-searchd-release –––
+––– block: check-searchd-process –––
+––– block: check-backup –––
+––– block: check-version/export-current-version –––
+––– input –––
+wget -q https://repo.manticoresearch.com/manticore-dev-repo.noarch.deb; echo $?
+––– output –––
+0
+––– input –––
+dpkg -i manticore-dev-repo.noarch.deb > /dev/null; echo $?
+––– output –––
+gpg: keyring '/etc/apt/trusted.gpg.d/manticore-keyring.gpg' created
+gpg: directory '/root/.gnupg' created
+gpg: /root/.gnupg/trustdb.gpg: trustdb created
+gpg: key 14D612DB3D2730E2: public key "Manticore Search <support@manticoresearch.com>" imported
+gpg: Total number processed: 1
+gpg:               imported: 1
+0
+––– input –––
+apt-get update -y > /dev/null; echo $?
+––– output –––
+0
+––– input –––
+apt -y install manticore manticore-extra manticore-common manticore-server manticore-server-core manticore-tools manticore-executor manticore-buddy manticore-backup manticore-columnar-lib manticore-server-core-dbgsym manticore-tools-dbgsym manticore-columnar-lib-dbgsym manticore-icudata-65l manticore-galera > /dev/null
+––– output –––
+WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+LANGUAGE = (unset),
+LC_ALL = (unset),
+LANG = "en_US.UTF-8"
+are supported and installed on your system.
+perl: warning: Falling back to the standard locale ("C").
+debconf: delaying package configuration, since apt-utils is not installed
+––– block: stop-searchd-dev –––
+––– block: start-searchd-dev –––
+––– block: check-version/export-new-version –––
+––– block: check-version/comparison-version –––
+––– block: check-backup –––
+––– input –––
+apt-get remove -y 'manticore*' > /dev/null 2>&1; echo $?
+––– output –––
+0
+––– input –––
+dpkg -l | grep ^rc | awk '/^rc/ && /manticore/ { print $2 }'
+––– output –––
+manticore-common
+manticore-repo
+manticore-server
+manticore-server-core
+manticore-tools

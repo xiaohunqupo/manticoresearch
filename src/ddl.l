@@ -87,6 +87,7 @@ EXPONENT			[eE](\+|-)?{DIGIT}+
 "KNN_DIMS"			{ YYSTOREBOUNDS; return TOK_KNN_DIMS; }
 "KNN_TYPE"			{ YYSTOREBOUNDS; return TOK_KNN_TYPE; }
 "LIKE"				{ YYSTOREBOUNDS; return TOK_LIKE; }
+"OPTION"			{ YYSTOREBOUNDS; return TOK_OPTION; }
 "MODIFY"			{ YYSTOREBOUNDS; return TOK_MODIFY; }
 "MULTI"				{ YYSTOREBOUNDS; return TOK_MULTI; }
 "MULTI64"			{ YYSTOREBOUNDS; return TOK_MULTI64; }
@@ -97,6 +98,7 @@ EXPONENT			[eE](\+|-)?{DIGIT}+
 "RETURNS"			{ YYSTOREBOUNDS; return TOK_RETURNS; }
 "RTINDEX"			{ YYSTOREBOUNDS; return TOK_RTINDEX; }
 "SECONDARY"			{ YYSTOREBOUNDS; return TOK_SECONDARY; }
+"SECONDARY_INDEX"	{ YYSTOREBOUNDS; return TOK_SECONDARY_INDEX; }
 "SONAME"			{ YYSTOREBOUNDS; return TOK_SONAME; }
 "STORED"			{ YYSTOREBOUNDS; return TOK_STORED; }
 "STRING"			{ YYSTOREBOUNDS; return TOK_STRING; }
@@ -115,6 +117,7 @@ EXPONENT			[eE](\+|-)?{DIGIT}+
 {TABLEID}           { YYSTOREBOUNDS; return TOK_TABLEIDENT; }
 `{TABLEID}`			{ YYSTOREBOUNDS; ++lvalp->m_iStart; --lvalp->m_iEnd; return TOK_TABLEIDENT; }
 `{DIGIT}+{TABLEID}`	{ YYSTOREBOUNDS; ++lvalp->m_iStart; --lvalp->m_iEnd; return TOK_TABLEIDENT; } // allow `123xyz` table names
+SYSTEM\.{TABLEID}	{ YYSTOREBOUNDS; return TOK_TABLEIDENT; }
 
 {ID}				{ YYSTOREBOUNDS; return TOK_IDENT; }
 `{ID}`				{ YYSTOREBOUNDS; ++lvalp->m_iStart; --lvalp->m_iEnd; return TOK_IDENT; }

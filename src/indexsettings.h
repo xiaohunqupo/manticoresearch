@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -104,8 +104,8 @@ public:
 	CSphString		m_sMorphFingerprint;		///< not used for creation; only for a check when loading
 
 	void			Setup ( const CSphConfigSection & hIndex, FilenameBuilder_i * pFilenameBuilder, CSphString & sWarning );
-	void			Load ( CSphReader & tReader, CSphEmbeddedFiles & tEmbeddedFiles, CSphString & sWarning );
-	void			Load ( const bson::Bson_c& tNode, CSphEmbeddedFiles& tEmbeddedFiles, CSphString& sWarning );
+	void			Load ( CSphReader & tReader, CSphEmbeddedFiles & tEmbeddedFiles, FilenameBuilder_i * pFilenameBuilder, CSphString & sWarning );
+	void			Load ( const bson::Bson_c & tNode, CSphEmbeddedFiles& tEmbeddedFiles, FilenameBuilder_i * pFilenameBuilder, CSphString & sWarning );
 
 	void			DumpReadable ( SettingsFormatterState_t & tState, const CSphEmbeddedFiles & tEmbeddedFiles, FilenameBuilder_i * pFilenameBuilder ) const override;
 	void			Format ( SettingsFormatter_c & tOut, FilenameBuilder_i * pFilenameBuilder ) const override;
@@ -176,6 +176,8 @@ public:
 	StrVec_t m_dRowwiseAttrs;			///< list of attributes to NOT be placed in columnar store
 	StrVec_t m_dColumnarStringsNoHash;	///< list of columnar string attributes that don't need pregenerated hashes
 
+	StrVec_t m_dJsonSIAttrs;			///< list of JSON attributes that need secondary indexes generated
+
 	CSphVector<NamedKNNSettings_t> m_dKNN;		///< knn index settings
 
 	ESphWordpart GetWordpart ( const char * sField, bool bWordDict );
@@ -191,7 +193,8 @@ private:
 enum class Preprocessor_e
 {
 	NONE,			///< no preprocessor
-	ICU				///< ICU chinese preprocessor
+	ICU,			///< ICU chinese preprocessor
+	JIEBA			///< Jieba chinese preprocessor
 };
 
 
@@ -242,6 +245,15 @@ enum ESphBigram : BYTE
 	SPH_BIGRAM_BOTHFREQ		= 3		///< only index pairs where both words are in a frequent words list
 };
 
+enum class JiebaMode_e
+{
+	NONE,
+	ACCURATE,
+	FULL,
+	SEARCH,
+
+	DEFAULT = ACCURATE
+};
 
 class CSphIndexSettings : public CSphSourceSettings, public DocstoreSettings_t
 {
@@ -265,8 +277,12 @@ public:
 
 	DWORD			m_uAotFilterMask = 0;			///< lemmatize_XX_all forces us to transform queries on the index level too
 	Preprocessor_e	m_ePreprocessor = Preprocessor_e::NONE;
+	JiebaMode_e		m_eJiebaMode = JiebaMode_e::DEFAULT;
+	bool			m_bJiebaHMM = true;
+	CSphString		m_sJiebaUserDictPath;
 
 	CSphString		m_sIndexTokenFilter;	///< indexing time token filter spec string (pretty useless for disk, vital for RT)
+	bool 			m_bBinlog = true;
 
 	bool			Setup ( const CSphConfigSection & hIndex, const char * szIndexName, CSphString & sWarning, CSphString & sError );
 	void			Format ( SettingsFormatter_c & tOut, FilenameBuilder_i * pFilenameBuilder ) const override;
@@ -275,7 +291,9 @@ private:
 	void			ParseStoredFields ( const CSphConfigSection & hIndex );
 	bool			ParseColumnarSettings ( const CSphConfigSection & hIndex, CSphString & sError );
 	bool			ParseKNNSettings ( const CSphConfigSection & hIndex, CSphString & sError );
+	bool			ParseSISettings ( const CSphConfigSection & hIndex, CSphString & sError );
 	bool			ParseDocstoreSettings ( const CSphConfigSection & hIndex, CSphString & sWarning, CSphString & sError );
+	bool			ParseCJKSegmentation ( const CSphConfigSection & hIndex, const StrVec_t & dMorphs, CSphString & sWarning, CSphString & sError );
 };
 
 
@@ -297,9 +315,13 @@ enum class MutableName_e
 	ACCESS_BLOB_ATTRS,
 	ACCESS_DOCLISTS,
 	ACCESS_HITLISTS,
+	ACCESS_DICT,
 	READ_BUFFER_DOCS,
 	READ_BUFFER_HITS,
 	OPTIMIZE_CUTOFF,
+	GLOBAL_IDF,
+	DISKCHUNK_FLUSH_WRITE_TIMEOUT,
+	DISKCHUNK_FLUSH_SEARCH_TIMEOUT,
 
 	TOTAL
 };
@@ -313,6 +335,7 @@ struct FileAccessSettings_t : public SettingsWriter_c
 	FileAccess_e	m_eBlob = FileAccess_e::MMAP_PREREAD;
 	FileAccess_e	m_eDoclist = FileAccess_e::FILE;
 	FileAccess_e	m_eHitlist = FileAccess_e::FILE;
+	FileAccess_e	m_eDict = FileAccess_e::MMAP_PREREAD;
 	int				m_iReadBufferDocList = DEFAULT_READ_BUFFER;
 	int				m_iReadBufferHitList = DEFAULT_READ_BUFFER;
 
@@ -330,6 +353,10 @@ public:
 	bool		m_bPreopen = false;
 	FileAccessSettings_t m_tFileAccess;
 	int			m_iOptimizeCutoff;
+	CSphString	m_sGlobalIDFPath;
+	// flush check periods, in seconds
+	int			m_iFlushWrite;
+	int			m_iFlushSearch;
 	
 	MutableIndexSettings_c();
 
@@ -369,6 +396,7 @@ struct CreateTableAttr_t
 	CSphColumnInfo			m_tAttr;
 	bool					m_bFastFetch = true;
 	bool					m_bStringHash = true;
+	bool					m_bIndexed = false;
 	bool					m_bKNN = false;
 	knn::IndexSettings_t	m_tKNN;
 };
@@ -388,38 +416,27 @@ struct CreateTableSettings_t
 	CSphVector<NameValueStr_t>		m_dOpts;
 };
 
-
-class IndexSettingsContainer_c
+class IndexSettingsContainer_i
 {
 public:
-	bool			Populate ( const CreateTableSettings_t & tCreateTable );
-	bool			Add ( const char * szName, const CSphString & sValue );
-	bool			Add ( const CSphString & sName, const CSphString & sValue );
-	CSphString		Get ( const CSphString & sName ) const;
-	bool			Contains ( const char * szName ) const;
-	void			RemoveKeys ( const CSphString & sName );
-	bool			AddOption ( const CSphString & sName, const CSphString & sValue );
-	StrVec_t 		GetFiles() const;
-	bool			CheckPaths();
+	virtual ~IndexSettingsContainer_i() {};
 
-	const CSphConfigSection &	AsCfg() const;
-	const CSphString &			GetError() const { return m_sError; }
+	virtual bool			Populate ( const CreateTableSettings_t & tCreateTable, bool bExtCopy ) = 0;
+	virtual bool			Add ( const char * szName, const CSphString & sValue ) = 0;
+	virtual bool			Add ( const CSphString & sName, const CSphString & sValue ) = 0;
+	virtual CSphString		Get ( const CSphString & sName ) const =0 ;
+	virtual bool			Contains ( const char * szName ) const = 0;
+	virtual void			RemoveKeys ( const CSphString & sName ) = 0;
+	virtual bool			AddOption ( const CSphString & sName, const CSphString & sValue, bool bExtCopy ) = 0;
+	virtual bool			CheckPaths() = 0;
+	virtual bool			CopyExternalFiles ( const CSphString & sIndexPath, int iSuffix ) = 0;
+	virtual void			ResetCleanup() = 0;
 
-private:
-	CSphConfigSection m_hCfg;
-
-	StrVec_t		m_dStopwordFiles;
-	StrVec_t		m_dExceptionFiles;
-	StrVec_t		m_dWordformFiles;
-	StrVec_t		m_dHitlessFiles;
-	CSphString		m_sError;
-	AttrEngine_e	m_eEngine = AttrEngine_e::DEFAULT;
-
-	void			SetupColumnarAttrs ( const CreateTableSettings_t & tCreateTable );
-	void			SetupKNNAttrs ( const CreateTableSettings_t & tCreateTable );
-	void			SetDefaults();
+	virtual const CSphConfigSection &	AsCfg() const = 0;
+	virtual const CSphString &			GetError() const = 0;
 };
 
+IndexSettingsContainer_i * CreateIndexSettingsContainer ();
 
 class ISphTokenizer;
 class CSphDict;
@@ -456,10 +473,17 @@ class JsonEscapedBuilder;
 void operator<< ( JsonEscapedBuilder& tOut, const CSphFieldFilterSettings& tFieldFilterSettings );
 void operator<< ( JsonEscapedBuilder& tOut, const CSphIndexSettings& tIndexSettings );
 
-void SaveTokenizerSettings ( JsonEscapedBuilder& tOut, const TokenizerRefPtr_c& pTokenizer, int iEmbeddedLimit );
-void SaveDictionarySettings ( JsonEscapedBuilder& tOut, const DictRefPtr_c& pDict, bool bForceWordDict, int iEmbeddedLimit );
+void		SaveTokenizerSettings ( JsonEscapedBuilder& tOut, const TokenizerRefPtr_c& pTokenizer, int iEmbeddedLimit );
+void		SaveDictionarySettings ( JsonEscapedBuilder& tOut, const DictRefPtr_c& pDict, bool bForceWordDict, int iEmbeddedLimit );
 
-void SetDefaultAttrEngine ( AttrEngine_e eEngine );
+void		SetDefaultAttrEngine ( AttrEngine_e eEngine );
 AttrEngine_e GetDefaultAttrEngine();
+
+bool		ForceExactWords ( bool bWordDict, bool bHasMorphology, int iMinPrefixLen, int iMinInfixLen, bool bMorphFieldsEmpty );
+
+void		LoadIndexSettingsJson ( bson::Bson_c tNode, CSphIndexSettings & tSettings );
+void		operator << ( JsonEscapedBuilder & tOut, const CSphIndexSettings & tSettings );
+void		LoadIndexSettings ( CSphIndexSettings & tSettings, CSphReader & tReader, DWORD uVersion );
+void		SaveIndexSettings ( Writer_i & tWriter, const CSphIndexSettings & tSettings );
 
 #endif // _indexsettings_

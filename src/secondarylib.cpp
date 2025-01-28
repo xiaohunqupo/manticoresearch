@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2020-2024, Manticore Software LTD (https://manticoresearch.com)
 // All rights reserved
 //
 // This program is free software; you can redistribute it and/or modify
@@ -17,16 +17,18 @@
 #include "columnarmisc.h"
 #include "secondarylib.h"
 
+namespace sec {
 using CheckStorage_fn =			void (*) ( const std::string & sFilename, uint32_t uNumRows, std::function<void (const char*)> & fnError, std::function<void (const char*)> & fnProgress );
 using VersionStr_fn =			const char * (*)();
 using GetVersion_fn	=			int (*)();
 using CreateSI_fn =				SI::Index_i * (*) ( const char * sFile, std::string & sError );
-using CreateBuilder_fn =		SI::Builder_i *	(*) ( const common::Schema_t & tSchema, int iMemoryLimit, const std::string & sFile, std::string & sError );
+using CreateBuilder_fn =		SI::Builder_i *	(*) ( const common::Schema_t & tSchema, size_t tMemoryLimit, const std::string & sFile, size_t tBufferSize, std::string & sError );
+}
 
 static void *					g_pSecondaryLib = nullptr;
-static VersionStr_fn			g_fnVersionStr = nullptr;
-static CreateSI_fn				g_fnCreateSI = nullptr;
-static CreateBuilder_fn			g_fnCreateBuilder = nullptr;
+static sec::VersionStr_fn		g_fnVersionSecStr = nullptr;
+static sec::CreateSI_fn			g_fnCreateSI = nullptr;
+static sec::CreateBuilder_fn	g_fnCreateBuilder = nullptr;
 
 /////////////////////////////////////////////////////////////////////
 
@@ -35,7 +37,7 @@ bool InitSecondary ( CSphString & sError )
 {
 	assert ( !g_pSecondaryLib );
 
-	CSphString sLibfile = TryDifferentPaths ( LIB_MANTICORE_SECONDARY, GetSecondaryFullpath() );
+	CSphString sLibfile = TryDifferentPaths ( LIB_MANTICORE_SECONDARY, GetSecondaryFullpath(), SI::LIB_VERSION );
 	if ( sLibfile.IsEmpty() )
 		return true;
 
@@ -55,7 +57,7 @@ bool InitSecondary ( CSphString & sError )
 
 	sphLogDebug ( "dlopen(%s)=%p", sLibfile.cstr(), tHandle.Get() );
 
-	GetVersion_fn fnGetVersion;
+	sec::GetVersion_fn fnGetVersion;
 	if ( !LoadFunc ( fnGetVersion, tHandle.Get(), "GetSecondaryLibVersion", sLibfile, sError ) )
 		return false;
 
@@ -66,7 +68,7 @@ bool InitSecondary ( CSphString & sError )
 		return false;
 	}
 
-	if ( !LoadFunc ( g_fnVersionStr, tHandle.Get(), "GetSecondaryLibVersionStr", sLibfile, sError ) )				return false;
+	if ( !LoadFunc ( g_fnVersionSecStr, tHandle.Get(), "GetSecondaryLibVersionStr", sLibfile, sError ) )				return false;
 	if ( !LoadFunc ( g_fnCreateSI, tHandle.Get(), "CreateSecondaryIndex", sLibfile, sError ) )						return false;
 	if ( !LoadFunc ( g_fnCreateBuilder, tHandle.Get(), "CreateBuilder", sLibfile, sError ) )						return false;
 
@@ -98,8 +100,8 @@ const char * GetSecondaryVersionStr()
 	if ( !IsSecondaryLibLoaded() )
 		return nullptr;
 
-	assert ( g_fnVersionStr );
-	return g_fnVersionStr();
+	assert ( g_fnVersionSecStr );
+	return g_fnVersionSecStr();
 }
 
 
@@ -126,7 +128,7 @@ SI::Index_i * CreateSecondaryIndex ( const char * sFile, CSphString & sError )
 	return pSIdx;
 }
 
-std::unique_ptr<SI::Builder_i> CreateSecondaryIndexBuilder ( const common::Schema_t & tSchema, int iMemoryLimit, const CSphString & sFile, CSphString & sError )
+std::unique_ptr<SI::Builder_i> CreateSecondaryIndexBuilder ( const common::Schema_t & tSchema, int64_t iMemoryLimit, const CSphString & sFile, int iBufferSize, CSphString & sError )
 {
 	if ( !IsSecondaryLibLoaded() )
 	{
@@ -137,7 +139,7 @@ std::unique_ptr<SI::Builder_i> CreateSecondaryIndexBuilder ( const common::Schem
 	assert ( g_fnCreateBuilder );
 
 	std::string sTmpError;
-	std::unique_ptr<SI::Builder_i> pBuilder { g_fnCreateBuilder ( tSchema, iMemoryLimit, sFile.cstr(), sTmpError ) };
+	std::unique_ptr<SI::Builder_i> pBuilder { g_fnCreateBuilder ( tSchema, iMemoryLimit, sFile.cstr(), iBufferSize, sTmpError ) };
 	if ( !pBuilder )
 		sError = sTmpError.c_str();
 

@@ -4,7 +4,7 @@
 ## Defining table schema in a configuration file
 
 ```ini
-table <index_name>[:<parent table name>] {
+table <table_name>[:<parent table name>] {
 ...
 }
 ```
@@ -134,7 +134,7 @@ $params = [
             'price'=>['type'=>'float']
         ]
     ],
-    'index' => 'products'
+    'table' => 'products'
 ];
 $index = new \Manticoresearch\Index($client);
 $index->create($params);
@@ -166,6 +166,22 @@ utilsApi.sql("CREATE TABLE products(title text, content text stored indexed, nam
 <!-- request C# -->
 ```clike
 utilsApi.Sql("CREATE TABLE products(title text, content text stored indexed, name text indexed, price float)");
+```
+
+<!-- intro -->
+##### Typescript:
+
+<!-- request Typescript -->
+```typescript
+res = await utilsApi.sql('CREATE TABLE products(title text, content text stored indexed, name text indexed, price float)');
+```
+
+<!-- intro -->
+##### Go:
+
+<!-- request Go -->
+```go
+utilsAPI.Sql(context.Background()).Body("CREATE TABLE products(title text, content text stored indexed, name text indexed, price float)").Execute()
 ```
 
 <!-- request CONFIG -->
@@ -203,6 +219,111 @@ In contrast, the latter (string attribute):
 * is stored on disk and in memory
 * is stored in an uncompressed format
 * can be used for sorting, grouping, filtering, and any other actions you want to take with attributes.
+
+#### json_secondary_indexes
+
+```ini
+json_secondary_indexes = json_attr
+```
+
+<!-- example json_secondary_indexes -->
+
+By default, secondary indexes are generated for all attributes except JSON attributes. However, secondary indexes for JSON attributes can be explicitly generated using the `json_secondary_indexes` setting. When a JSON attribute is included in this option, its contents are flattened into multiple secondary indexes. These indexes can be used by the query optimizer to speed up queries.
+
+You can view the available secondary indexes using the [SHOW TABLE <tbl> INDEXES](../../Node_info_and_management/Table_settings_and_status/SHOW_TABLE_INDEXES.md) command.
+
+Value: A comma-separated list of JSON attributes for which secondary indexes should be generated.
+
+<!-- intro -->
+##### SQL:
+
+<!-- request SQL -->
+
+```sql
+CREATE TABLE products(title text, j json secondary_index='1')
+```
+
+<!-- request JSON -->
+
+```JSON
+POST /cli -d "
+CREATE TABLE products(title text, j json secondary_index='1')"
+```
+
+<!-- request PHP -->
+
+```php
+$params = [
+    'body' => [
+        'columns' => [
+            'title'=>['type'=>'text'],
+            'j'=>['type'=>'json', 'options' => ['secondary_index' => 1]]
+        ]
+    ],
+    'table' => 'products'
+];
+$index = new \Manticoresearch\Index($client);
+$index->create($params);
+```
+<!-- intro -->
+##### Python:
+<!-- request Python -->
+```python
+utilsApi.sql('CREATE TABLE products(title text, j json secondary_index='1')')
+```
+
+<!-- intro -->
+##### Javascript:
+
+<!-- request Javascript -->
+```javascript
+res = await utilsApi.sql('CREATE TABLE products(title text, j json secondary_index=\'1\')');
+```
+
+<!-- intro -->
+##### Java:
+<!-- request Java -->
+```java
+utilsApi.sql("CREATE TABLE products(title text, j json secondary_index='1')");
+```
+
+<!-- intro -->
+##### C#:
+<!-- request C# -->
+```clike
+utilsApi.Sql("CREATE TABLE products(title text, j json secondary_index='1')");
+```
+
+<!-- intro -->
+##### Typescript:
+
+<!-- request Typescript -->
+```typescript
+res = await utilsApi.sql('CREATE TABLE products(title text, j json secondary_index=\'1\')');
+```
+
+<!-- intro -->
+##### Go:
+
+<!-- request Go -->
+```go
+utilsAPI.Sql(context.Background()).Body("CREATE TABLE products(title text, j json secondary_index='1')").Execute()
+```
+
+
+<!-- request CONFIG -->
+
+```ini
+table products {
+  json_secondary_indexes = j
+
+  type = rt
+  path = tbl
+  rt_field = title
+  rt_attr_json = j
+}
+```
+<!-- end -->
 
 ### Real-time table settings:
 
@@ -342,11 +463,20 @@ The `rt_mem_limit` is never exceeded, but the actual RAM chunk size can be signi
 
 For instance, if 90MB of data is saved to a disk chunk and an additional 10MB of data arrives while the save is in progress, the rate would be 90%. Next time, the RT table will collect up to 90% of `rt_mem_limit` before flushing the data. The faster the insertion pace, the lower the `rt_mem_limit` rate. The rate varies between 33.3% to 95%. You can view the current rate of a table using the [SHOW TABLE <tbl> STATUS](../../Node_info_and_management/Table_settings_and_status/SHOW_TABLE_STATUS.md) command.
 
+#### diskchunk_flush_write_timeout
+
+The timeout for auto-flushing a RAM chunk if there are no writes to it. Learn more [here](../../Server_settings/Searchd.md#diskchunk_flush_write_timeout).
+
+#### diskchunk_flush_search_timeout
+
+The timeout for preventing auto-flushing a RAM chunk if there are no searches in the table. Learn more [here](../../Server_settings/Searchd.md#diskchunk_flush_search_timeout).
+
+
 ##### How to change rt_mem_limit and optimize_cutoff
 
 In real-time mode, you can adjust the size limit of RAM chunks and the maximum number of disk chunks using the `ALTER TABLE` statement. To set `rt_mem_limit` to 1 gigabyte for the table "t," run the following query: `ALTER TABLE t rt_mem_limit='1G'`. To change the maximum number of disk chunks, run the query: `ALTER TABLE t optimize_cutoff='5'`.
 
-In the plain mode, you can change the values of `rt_mem_limit` and `optimize_cutoff` by updating the table configuration or running the command `ALTER TABLE <index_name> RECONFIGURE`
+In the plain mode, you can change the values of `rt_mem_limit` and `optimize_cutoff` by updating the table configuration or running the command `ALTER TABLE <table_name> RECONFIGURE`
 
 ##### Important notes about RAM chunks
 
@@ -354,8 +484,8 @@ In the plain mode, you can change the values of `rt_mem_limit` and `optimize_cut
 * Each RAM chunk is made up of multiple segments, which are special RAM-only tables.
 * While disk chunks are stored on disk, RAM chunks are stored in memory.
 * Each transaction made to a real-time table generates a new segment, and RAM chunk segments are merged after each transaction commit. It is more efficient to perform bulk INSERTs of hundreds or thousands of documents rather than multiple separate INSERTs with one document to reduce the overhead from merging RAM chunk segments.
-* When the number of segments exceeds 32, they will be merged to keep the count below 32. 
-* Real-time tables always have one RAM chunk (which may be empty) and one or more disk chunks. 
+* When the number of segments exceeds 32, they will be merged to keep the count below 32.
+* Real-time tables always have one RAM chunk (which may be empty) and one or more disk chunks.
 * Merging larger segments takes longer, so it's best to avoid having a very large RAM chunk (and therefore `rt_mem_limit`).
 * The number of disk chunks depends on the data in the table and the `rt_mem_limit` setting.
 * Searchd flushes the RAM chunk to disk (as a persisted file, not as a disk chunk) on shutdown and periodically according to the [rt_flush_period](../../Server_settings/Searchd.md#rt_flush_period) setting. Flushing several gigabytes to disk may take some time.
@@ -386,7 +516,7 @@ killlist_target = main:kl
 
 This setting determines the table(s) to which the kill-list will be applied. Matches in the targeted table that are updated or deleted in the current table will be suppressed. In `:kl` mode, the documents to suppress are taken from the [kill-list](../../Data_creation_and_modification/Adding_data_from_external_storages/Adding_data_to_tables/Killlist_in_plain_tables.md). In `:id` mode, all document IDs from the current table are suppressed in the targeted one. If neither is specified, both modes will take effect. [Learn more about kill-lists here](../../Data_creation_and_modification/Adding_data_from_external_storages/Adding_data_to_tables/Killlist_in_plain_tables.md)
 
-Value: **not specified** (default), target_index_name:kl, target_index_name:id, target_index_name. Multiple values are allowed
+Value: **not specified** (default), target_table_name:kl, target_table_name:id, target_table_name. Multiple values are allowed
 
 #### columnar_attrs
 
@@ -485,7 +615,7 @@ In seek+read mode, the server uses the `pread` system call to read document list
 
 In mmap access mode, the search server maps the table's file into memory using the `mmap` system call, and the OS caches the file contents. The options [read_buffer_docs](../../Server_settings/Searchd.md#read_buffer_docs) and [read_buffer_hits](../../Server_settings/Searchd.md#read_buffer_hits) have no effect for corresponding files in this mode. The mmap reader can also lock the table's data in memory using the`mlock` privileged call, which prevents the OS from swapping the cached data out to disk.
 
-To control which access mode to use, the options **access_plain_attrs**, **access_blob_attrs**, **access_doclists** and **access_hitlists**  are available, with the following values:
+To control which access mode to use, the options **access_plain_attrs**, **access_blob_attrs**, **access_doclists**, **access_hitlists** and **access_dict**  are available, with the following values:
 
 | Value | Description |
 | - | - |
@@ -497,10 +627,11 @@ To control which access mode to use, the options **access_plain_attrs**, **acces
 
 | Setting | Values | Description |
 | - | - | - |
-| access_plain_attrs  | mmap, **mmap_preread** (default), mlock | controls how `*.spa` (plain attributes) `*.spe` (skip lists) `*.spi` (word lists) `*.spt` (lookups) `*.spm` (killed docs) will be read |
+| access_plain_attrs  | mmap, **mmap_preread** (default), mlock | controls how `*.spa` (plain attributes) `*.spe` (skip lists) `*.spt` (lookups) `*.spm` (killed docs) will be read |
 | access_blob_attrs   | mmap, **mmap_preread** (default), mlock  | controls how `*.spb` (blob attributes) (string, mva and json attributes) will be read |
 | access_doclists   | **file** (default), mmap, mlock  | controls how `*.spd` (doc lists) data will be read |
 | access_hitlists   | **file** (default), mmap, mlock  | controls how `*.spp` (hit lists) data will be read |
+| access_dict   | mmap, **mmap_preread** (default), mlock  | controls how `*.spi` (dictionary) will be read |
 
 Here is a table which can help you select your desired mode:
 
@@ -511,6 +642,7 @@ Here is a table which can help you select your desired mode:
 | [columnar](../../Creating_a_table/Data_types.md#Row-wise-and-columnar-attribute-storages) numeric, string and multi-value attributes | always  | only by means of OS  | no  | not supported |
 | doc lists | **file** (default) | mmap | no	| mlock |
 | hit lists | **file** (default) | mmap | no	| mlock |
+| dictionary | mmap | mmap | **mmap_preread** (default) | mlock |
 
 ##### The recommendations are:
 
@@ -670,7 +802,7 @@ table products {
 inplace_reloc_factor = 0.1
 ```
 
-The inplace_reloc_factor setting determines the size of the relocation buffer within the memory arena used during indexing. The default value is 0.1. 
+The inplace_reloc_factor setting determines the size of the relocation buffer within the memory arena used during indexing. The default value is 0.1.
 
 This option is optional and only affects the [indexer](../../Data_creation_and_modification/Adding_data_from_external_storages/Plain_tables_creation.md#Indexer-tool) tool, not the [searchd](../../Starting_the_server/Manually.md)  server.
 

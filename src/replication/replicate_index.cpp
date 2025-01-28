@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2023, Manticore Software LTD (http://manticoresearch.com)
+// Copyright (c) 2019-2024, Manticore Software LTD (http://manticoresearch.com)
 // All rights reserved
 //
 // This program is free software; you can redistribute it and/or modify
@@ -63,7 +63,7 @@ static bool ActivateIndexOnRemotes ( const CSphString& sCluster, const CSphStrin
 	ARRAY_FOREACH ( i, dActivateIndexes )
 	{
 		const AgentDesc_t& tDesc = *dActivateIndexes[i];
-		dNodes[i] = ClusterIndexAddLocal_c::CreateAgent ( tDesc, g_iRemoteTimeoutMs, tAddLocal );
+		dNodes[i] = ClusterIndexAddLocal_c::CreateAgent ( tDesc, ReplicationTimeoutQuery(), tAddLocal );
 	}
 
 	sphLogDebugRpl ( "sent table '%s' %s to %d nodes with timeout %d.%03d sec", sIndex.cstr(), ( bSendOk ? "loading" : "rollback" ), dNodes.GetLength(), (int)( tmLongOpTimeout / 1000 ), (int)( tmLongOpTimeout % 1000 ) );
@@ -160,7 +160,7 @@ bool ReplicateIndexToNodes ( const CSphString& sCluster, const CSphString& sInde
 
 	sphLogDebugRpl ( "calculated sha1 of table '%s', files %d, hashes %d", sIndex.cstr(), tSigSrc.m_dIndexFiles.GetLength(), tSigSrc.m_dHashes.GetLength() );
 
-	int64_t tmLongOpTimeout = GetQueryTimeoutForReplication ( tSigSrc.m_tmTimeout * 3 ); // timeout = sha verify (of all index files) + preload (of all index files) +1 (for slow io)
+	int64_t tmLongOpTimeout = ReplicationTimeoutQuery ( tSigSrc.m_tmTimeout * 3 ); // timeout = sha verify (of all index files) + preload (of all index files) +1 (for slow io)
 
 	FileReserveRequest_t tRequest;
 	tRequest.m_sCluster = sCluster;
@@ -195,7 +195,7 @@ bool ReplicateIndexToNodes ( const CSphString& sCluster, const CSphString& sInde
 		}
 
 		tSigSrc.m_tmTimeout = Max ( tSigSrc.m_tmTimeout, tRes.m_tmTimeout );
-		tRes.m_tmTimeoutFile = GetQueryTimeoutForReplication ( Max ( tSigSrc.m_tmTimeoutFile, tRes.m_tmTimeoutFile ) * 3 );
+		tRes.m_tmTimeoutFile = ReplicationTimeoutQuery ( Max ( tSigSrc.m_tmTimeoutFile, tRes.m_tmTimeoutFile ) * 3 );
 
 		bool bFilesMatched = true;
 		for ( int iFile = 0; bFilesMatched && iFile < tSigSrc.m_dBaseNames.GetLength(); ++iFile )
@@ -219,7 +219,7 @@ bool ReplicateIndexToNodes ( const CSphString& sCluster, const CSphString& sInde
 	sErr.FinishBlock ();
 
 	// recalculate timeout after nodes reports
-	tmLongOpTimeout = GetQueryTimeoutForReplication ( tSigSrc.m_tmTimeout * 3 );
+	tmLongOpTimeout = ReplicationTimeoutQuery ( tSigSrc.m_tmTimeout * 3 );
 
 	if ( dSendStates.IsEmpty() && dActivateIndexes.IsEmpty() )
 		return true;
@@ -284,7 +284,7 @@ bool ReplicateDistIndexToNodes ( const CSphString & sCluster, const CSphString &
 	ClusterSendDistIndex_c tReq;
 	DistIndexSendRequest_t tSend ( *pDist, sCluster, sIndex );
 
-	int64_t tmTimeout = GetQueryTimeoutForReplication();
+	int64_t tmTimeout = ReplicationTimeoutQuery();
 	auto dNodes = ClusterSendDistIndex_c::MakeAgents ( dDesc, tmTimeout, tSend );
 
 	sphLogDebugRpl ( "sending table '%s' to %d nodes with timeout %d.%03d sec", sIndex.cstr(), dNodes.GetLength(), (int)( tmTimeout / 1000 ), (int)( tmTimeout % 1000 ) );
@@ -322,9 +322,15 @@ static bool AddDistIndex ( const DistIndexSendRequest_t & tCmd )
 
 	StrVec_t dWarnings;
 	DistributedIndexRefPtr_t pIdx ( new DistributedIndex_t );
-	ConfigureDistributedIndex ( []( const auto & sIdx ){ return true; }, *pIdx, tCmd.m_sIndex.cstr(), hConf, &dWarnings );
+	bool bOk = ConfigureDistributedIndex ( []( const auto & sIdx ){ return true; }, *pIdx, tCmd.m_sIndex.cstr(), hConf, sError, &dWarnings );
 	for ( const CSphString & sMsg : dWarnings )
 		sphWarning ( "distributed table '%s:%s': %s", tCmd.m_sCluster.cstr(), tCmd.m_sIndex.cstr(), sMsg.cstr() );
+	if ( !bOk || pIdx->IsEmpty() )
+	{
+		TlsMsg::Err ( "failed to create distributed table '%s:%s': %s", tCmd.m_sCluster.cstr(), tCmd.m_sIndex.cstr(), sError.cstr() );
+		sError = "";
+		return false;
+	}
 
 	// finally, check and add a new or replace an existed distributed index to global table
 	g_pDistIndexes->AddOrReplace ( pIdx, tCmd.m_sIndex );

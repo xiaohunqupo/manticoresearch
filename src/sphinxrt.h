@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -28,12 +28,12 @@ class RtAccum_t;
 
 using VisitChunk_fn = std::function<void ( const CSphIndex* pIndex )>;
 
-struct InsertDocData_t
+class InsertDocData_c
 {
+public:
 	CSphMatch							m_tDoc;
 	CSphVector<VecTraits_T<const char>>	m_dFields;
 	CSphVector<const char*>				m_dStrings;
-	CSphVector<int64_t>					m_dMvas;
 
 	CSphAttrLocator						m_tDocIDLocator;
 
@@ -41,10 +41,22 @@ struct InsertDocData_t
 	int									m_iColumnarID = -1;
 	int64_t								m_iTotalBytes = 0;
 
-										explicit InsertDocData_t ( const ISphSchema & tSchema );
+										explicit InsertDocData_c ( const ISphSchema & tSchema );
 
 	void								SetID ( SphAttr_t tDocID );
 	SphAttr_t							GetID() const;
+
+	void								AddMVALength ( int iLength, bool bDefault=false );
+	void								AddMVAValue ( int64_t iValue )						{ m_dMvas.Add(iValue); }
+	void								ResetMVAs()											{ m_dMvas.Resize(0); }
+	const int64_t *						GetMVA ( int iMVA ) const							{ return m_dMvas.Begin()+iMVA; }
+	void								FixParsedMVAs ( const CSphVector<int64_t> & dParsed, int iCount );
+	static std::pair<int, bool>			ReadMVALength ( const int64_t * & pMVA );
+
+private:
+	static const uint64_t DEFAULT_FLAG = 1ULL << 63;
+
+	CSphVector<int64_t>					m_dMvas;
 };
 
 struct OptimizeTask_t
@@ -56,6 +68,7 @@ struct OptimizeTask_t
 		eSplit,
 		eMerge,
 		eAutoOptimize,
+		eDedup,
 	};
 
 	OptimizeVerb_e m_eVerb;
@@ -64,7 +77,6 @@ struct OptimizeTask_t
 	int m_iTo		=	-1;
 	bool m_bByOrder = false;
 	CSphString m_sUvarFilter;
-	CSphString m_sIndex;
 };
 
 struct CSphReconfigureSettings
@@ -103,7 +115,7 @@ public:
 
 	/// insert/update document in current txn
 	/// fails in case of two open txns to different indexes
-	virtual bool AddDocument ( InsertDocData_t & tDoc, bool bReplace, const CSphString & sTokenFilterOptions, CSphString & sError, CSphString & sWarning, RtAccum_t * pAccExt ) = 0;
+	virtual bool AddDocument ( InsertDocData_c & tDoc, bool bReplace, const CSphString & sTokenFilterOptions, CSphString & sError, CSphString & sWarning, RtAccum_t * pAccExt ) = 0;
 
 	/// delete document in current txn
 	/// fails in case of two open txns to different indexes
@@ -126,13 +138,24 @@ public:
 	/// forcibly save RAM chunk as a new disk chunk
 	virtual bool ForceDiskChunk () = 0;
 
+	/// forcibly save RAM chunk as a new disk chunk by the conditions (has new data and has recent searches)
+	virtual void ForceDiskChunk ( int iFlushWrite, int iFlushSearch ) {};
+
 	/// attach a disk chunk to current index
-	virtual bool AttachDiskIndex ( CSphIndex * pIndex, bool bTruncate, bool & bFatal, StrVec_t & dWarnings, CSphString & sError ) { return true; }
+	virtual bool AttachDiskIndex ( CSphIndex * pIndex, bool bTruncate, bool & bFatal, CSphString & sError ) { return true; }
+
+	/// attach all the content of the RT index (flush ramchunk then disk chunks) to the current index
+	virtual bool AttachRtIndex ( RtIndex_i * pIndex, bool bTruncate, bool & bFatal, CSphString & sError ) { return true; }
 
 	/// truncate index (that is, kill all data)
-	virtual bool Truncate ( CSphString & sError ) = 0;
+	enum Truncate_e : bool { TRUNCATE, DROP };
+	virtual bool Truncate ( CSphString & sError, Truncate_e eAction ) = 0;
 
 	virtual void Optimize ( OptimizeTask_t tTask ) {}
+	virtual bool StartOptimize ( OptimizeTask_t tTask ) { return true; }
+	virtual int OptimizesRunning () const noexcept { return 0; }
+
+	virtual int GetNumOfLocks () const noexcept { return 0; }
 
 	/// check settings vs current and return back tokenizer and dictionary in case of difference
 	virtual bool IsSameSettings ( CSphReconfigureSettings & tSettings, CSphReconfigureSetup & tSetup, StrVec_t & dWarnings, CSphString & sError ) const = 0;
@@ -161,9 +184,13 @@ public:
 	virtual void ProhibitSave() = 0;
 	virtual void EnableSave() = 0;
 	virtual void LockFileState ( CSphVector<CSphString> & dFiles ) = 0;
+
+	virtual void WaitLockEnabledState() noexcept {};
+	virtual void UnlockEnabledState () noexcept {};
 	
 	virtual bool	NeedStoreWordID () const = 0;
 	virtual	int64_t	GetMemLimit() const = 0;
+	virtual int		GetChunkId () const { return 0; };
 
 protected:
 	bool PrepareAccum ( RtAccum_t* pAccExt, bool bWordDict, CSphString* pError );
@@ -171,7 +198,7 @@ protected:
 
 /// initialize subsystem
 class CSphConfigSection;
-void sphRTInit ( const CSphConfigSection & hSearchd, bool bTestMode, const CSphConfigSection * pCommon );
+void sphRTInit ( CSphString sBinlogPath, bool bCommonBinlog = false, const CSphConfigSection * pCommon = nullptr );
 bool sphRTSchemaConfigure ( const CSphConfigSection & hIndex, CSphSchema & tSchema, const CSphIndexSettings & tSettings, StrVec_t * pWarnings, CSphString & sError, bool bSkipValidation, bool bPQ );
 void sphRTSetTestMode ();
 
@@ -216,7 +243,7 @@ struct RtWordCheckpoint_t
 	union
 	{
 		SphWordID_t m_uWordID;
-		const char * m_sWord;
+		const char * m_szWord;
 	};
 	int m_iOffset;
 };
@@ -434,8 +461,5 @@ volatile bool &RTChangesAllowed () noexcept;
 // Get global flag of autooptimize
 volatile int & AutoOptimizeCutoffMultiplier() noexcept;
 volatile int AutoOptimizeCutoff() noexcept;
-
-using OptimizeExecutorFnPtr = void (*) ( OptimizeTask_t );
-volatile OptimizeExecutorFnPtr& OptimizeExecutor() noexcept;
 
 #endif // _sphinxrt_

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -34,10 +34,11 @@ protected:
 	void SetUp() override
 	{
 		sphSrand ( 0 );
-		pDigest = sphCreateTDigest ();
+		pDigest = &tDigest;
 	}
 
-	std::unique_ptr<TDigest_i> pDigest;
+	TDigest_c tDigest;
+	TDigest_c* pDigest;
 };
 
 TEST_F ( TDigest, simple )

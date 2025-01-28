@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2022-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2022-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -47,11 +47,12 @@ public:
 			// Event
 			perfetto::protos::gen::TrackEventConfig tTrackEventCfg;
 			tTrackEventCfg.add_disabled_categories ( "*" );
-			tTrackEventCfg.add_enabled_categories ( "rt" );
-			tTrackEventCfg.add_enabled_categories ( "network" );
-			tTrackEventCfg.add_enabled_categories ( "conn" );
-			tTrackEventCfg.add_enabled_categories ( "wait" );
-			tTrackEventCfg.add_enabled_categories ( "mem" );
+			tTrackEventCfg.add_enabled_categories ( "*" );
+//			tTrackEventCfg.add_enabled_categories ( "rt" );
+//			tTrackEventCfg.add_enabled_categories ( "network" );
+//			tTrackEventCfg.add_enabled_categories ( "conn" );
+//			tTrackEventCfg.add_enabled_categories ( "wait" );
+//			tTrackEventCfg.add_enabled_categories ( "mem" );
 
 			// Trace
 			perfetto::TraceConfig tTraceCfg;

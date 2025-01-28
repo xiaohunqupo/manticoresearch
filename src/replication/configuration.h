@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2019-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -19,7 +19,7 @@
 bool ReplicationEnabled();
 
 // setup IP, ports and node incoming address
-void SetReplicationListener ( const VecTraits_T<ListenerDesc_t>& dListeners );
+bool SetReplicationListener ( const VecTraits_T<ListenerDesc_t>& dListeners, CSphString & sError );
 
 // listen IP part of address for Galera. The first of 'listen=' config with proto = replication
 const char* szListenReplicationIP();
@@ -36,8 +36,4 @@ const char* szIncomingProto();
 // used to filter out own adrress
 bool MyIncomingApiAddrBeginsWith ( const char* szHost );
 
-void SetReplicationListener ( const VecTraits_T<ListenerDesc_t>& dListeners );
-
 void ReplicationSetIncoming ( CSphString sIncoming );
-
-int64_t GetQueryTimeoutForReplication ( int64_t iTimeout = 0 ); // 2 minutes in msec

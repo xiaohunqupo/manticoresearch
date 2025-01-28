@@ -53,7 +53,6 @@ jobs:
       - run: echo "All set to build packages"
       - run: |
           echo '# Packing and publishing Galera for commit ${{ github.sha }}' >> $GITHUB_STEP_SUMMARY
-          echo '${{ github.event.head_commit.message }}' >> $GITHUB_STEP_SUMMARY
           echo '* Commit URL: [${{ github.sha }}](/${{ github.repository }}/commit/${{ github.sha }})' >> $GITHUB_STEP_SUMMARY
           echo '* Initiated by: [@${{ github.actor }}](https://github.com/${{ github.actor }})' >> $GITHUB_STEP_SUMMARY
           echo '* Ref: ${{ github.ref_type }} "${{ github.ref_name }}"' >> $GITHUB_STEP_SUMMARY
@@ -91,7 +90,7 @@ jobs:
     with:
       DISTR: ${{ matrix.DISTR }}
       arch: ${{ matrix.arch }}
-      boost: boost_rhel_feb17
+      boost_url_key: boost_rhel_feb17
       PACK_GALERA: 1
       cmake_command: |
         ln -s $(pwd) /builds_manticoresearch_dev_usr_src_debug_manticore_component_src_0
@@ -99,7 +98,7 @@ jobs:
         mkdir build
         cd build
         cmake -DPACK=1 ..
-      cache_key: pack_${{ matrix.DISTR }}_${{ matrix.arch }}
+      cache_key: pack_galera_${{ matrix.DISTR }}_${{ matrix.arch }}
       artifact_list: "build/manticore*rpm"
 
   pack_macos:
@@ -120,7 +119,7 @@ jobs:
         mkdir build
         cd build
         cmake -DPACK=1 ..
-      cache_key: pack_${{ matrix.DISTR }}_${{ matrix.arch }}
+      cache_key: pack_galera_${{ matrix.DISTR }}_${{ matrix.arch }}
       artifact_list: "build/manticore*tar.gz"
 
   # virtual job to simplify the CI
@@ -128,8 +127,7 @@ jobs:
   publish:
     name: OK to publish?
     runs-on: ubuntu-22.04
-#    needs: [pack_debian_ubuntu, pack_rhel, pack_macos]
-    needs: [pack_debian_ubuntu, pack_rhel]
+    needs: [pack_debian_ubuntu, pack_rhel, pack_macos]
     if: |
       (github.repository == 'manticoresoftware/manticoresearch')
       && (
@@ -207,7 +205,7 @@ jobs:
         image: [ "centos:7", "almalinux:8", "almalinux:9", "oraclelinux:9", "amazonlinux:latest" ]
     runs-on: ubuntu-22.04
     steps:
-      - uses: manticoresoftware/clt@0.1.11
+      - uses: manticoresoftware/clt@0.2.3
         with:
           image: ${{ matrix.image }}
           test_prefix: test/clt-tests/installation/rhel-dev-
@@ -221,7 +219,7 @@ jobs:
         image: [ "ubuntu:bionic", "ubuntu:focal", "ubuntu:jammy", "debian:buster", "debian:bullseye", "debian:bookworm" ]
     runs-on: ubuntu-22.04
     steps:
-      - uses: manticoresoftware/clt@0.1.11
+      - uses: manticoresoftware/clt@0.2.3
         with:
           image: ${{ matrix.image }}
           test_prefix: test/clt-tests/installation/deb-dev-

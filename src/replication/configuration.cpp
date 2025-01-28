@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2019-2024, Manticore Software LTD (https://manticoresearch.com)
 // Copyright (c) 2001-2016, Andrew Aksyonoff
 // Copyright (c) 2008-2016, Sphinx Technologies Inc
 // All rights reserved
@@ -14,8 +14,6 @@
 #include "searchdaemon.h"
 #include "searchdha.h"
 
-static bool g_bReplicationEnabled = false;
-
 static constexpr int g_iDefaultPortBias = 10;
 static constexpr int g_iDefaultPortRange = 200;
 
@@ -28,9 +26,8 @@ static CSphString g_sIncomingApiPoint;
 // listen IP part of address for Galera
 static CSphString g_sListenReplicationIP;
 
-
 // setup IP, ports and node incoming address
-void SetReplicationListener ( const VecTraits_T<ListenerDesc_t> & dListeners )
+bool SetReplicationListener ( const VecTraits_T<ListenerDesc_t> & dListeners, CSphString & sError )
 {
 	bool bGotReplicationPorts = false;
 	for ( const ListenerDesc_t& tListen : dListeners )
@@ -41,10 +38,7 @@ void SetReplicationListener ( const VecTraits_T<ListenerDesc_t> & dListeners )
 		const bool bBadCount = ( tListen.m_iPortsCount<2 );
 		const bool bBadRange = ( ( tListen.m_iPortsCount%2 )!=0 && ( tListen.m_iPortsCount-1 )<2 );
 		if ( bBadCount || bBadRange )
-		{
-			sphWarning ( "invalid replication ports count %d, should be at least 2", tListen.m_iPortsCount );
-			continue;
-		}
+			sphFatal ( "invalid replication ports count %d, should be at least 2", tListen.m_iPortsCount+1 );
 
 		// can not use 0.0.0.0 due to Galera error at ReplicatorSMM::InitConfig::InitConfig
 		if ( tListen.m_uIP != 0 )
@@ -75,9 +69,8 @@ void SetReplicationListener ( const VecTraits_T<ListenerDesc_t> & dListeners )
 	int iAPIPort = dListeners.GetFirst ( [&] ( const ListenerDesc_t & tListen ) { return tListen.m_eProto==Proto_e::SPHINX; } );
 	if ( iAPIPort==-1 )
 	{
-		if ( !GetClustersInt().IsEmpty() )
-			sphWarning ( "no 'listen' is found, cannot set incoming addresses, replication is disabled" );
-		return;
+		sError = "no 'listen' is found, cannot set incoming addresses, replication is disabled";
+		return false;
 	}
 
 	if ( !bGotReplicationPorts )
@@ -101,13 +94,12 @@ void SetReplicationListener ( const VecTraits_T<ListenerDesc_t> & dListeners )
 	if ( !g_bHasIncoming )
 		g_sIncomingIP = g_sListenReplicationIP;
 
+	sphLogDebugRpl ( "listens: Galera '%s', own '%s:%d'", g_sListenReplicationIP.cstr(), g_sIncomingIP.cstr(), dListeners[iAPIPort].m_iPort );
 	g_sIncomingApiPoint.SetSprintf ( "%s:%d", g_sIncomingIP.cstr(), dListeners[iAPIPort].m_iPort );
-	g_bReplicationEnabled = IsConfigless();
-}
+	if ( !IsConfigless() )
+		sError = "data_dir option is missing in config, replication is disabled";
 
-bool ReplicationEnabled()
-{
-	return g_bReplicationEnabled;
+	return IsConfigless();
 }
 
 void ReplicationSetIncoming ( CSphString sIncoming )
@@ -139,11 +131,4 @@ const char* szIncomingProto()
 bool MyIncomingApiAddrBeginsWith ( const char* szHost )
 {
 	return g_sIncomingApiPoint.Begins ( szHost );
-}
-
-int64_t GetQueryTimeoutForReplication ( int64_t iTimeout )
-{
-	// need default of 2 minutes in msec for replication requests as they are mostly long-running
-	int64_t iTmAtLeast2Min = Max ( g_iAgentQueryTimeoutMs, 120 * 1000 );
-	return Max ( iTmAtLeast2Min, Min ( iTimeout, INT_MAX ) );
 }

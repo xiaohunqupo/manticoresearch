@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017-2023, Manticore Software LTD (https://manticoresearch.com)
+// Copyright (c) 2017-2024, Manticore Software LTD (https://manticoresearch.com)
 // All rights reserved
 //
 // This program is free software; you can redistribute it and/or modify
@@ -31,8 +31,8 @@ public:
 	virtual				~BlobRowBuilder_i() {}
 
 	virtual bool		SetAttr ( int iAttr, const BYTE * pData, int iDataLen, CSphString & sError ) = 0;
-	virtual SphOffset_t	Flush() = 0;
-	virtual SphOffset_t	Flush ( const BYTE * pOldRow ) = 0;
+	virtual std::pair<SphOffset_t,SphOffset_t> Flush() = 0;
+	virtual std::pair<SphOffset_t,SphOffset_t> Flush ( const BYTE * pOldRow ) = 0;
 	virtual bool		Done ( CSphString & sError ) = 0;
 };
 
@@ -44,10 +44,10 @@ struct TypedAttribute_t
 
 
 // create file-based blob row builder
-std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowBuilder ( const ISphSchema & tSchema, const CSphString & sFile, SphOffset_t tSpaceForUpdates, CSphString & sError );
+std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowBuilder ( const ISphSchema & tSchema, const CSphString & sFile, SphOffset_t tSpaceForUpdates, int iBufferSize, CSphString & sError );
 
 // create file-based blob row builder with JSON already packed
-std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowJsonBuilder ( const ISphSchema & tSchema, const CSphString & sFile, SphOffset_t tSpaceForUpdates, CSphString & sError );
+std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowJsonBuilder ( const ISphSchema & tSchema, const CSphString & sFile, SphOffset_t tSpaceForUpdates, int iBufferSize, CSphString & sError );
 
 // create mem-based blob row builder
 std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowBuilder ( const ISphSchema & tSchema, CSphTightVector<BYTE> & dPool );
@@ -59,6 +59,9 @@ std::unique_ptr<BlobRowBuilder_i>	sphCreateBlobRowBuilderUpdate ( const ISphSche
 const BYTE *		sphGetBlobAttr ( const CSphMatch & tMatch, const CSphAttrLocator & tLocator, const BYTE * pBlobPool, int & iLengthBytes );
 
 ByteBlob_t			sphGetBlobAttr ( const CSphMatch & tMatch, const CSphAttrLocator & tLocator, const BYTE * pBlobPool );
+
+// fetch attribute data from a given blob row
+ByteBlob_t			sphGetBlobAttr ( const BYTE * pBlobRow, const CSphAttrLocator & tLocator );
 
 // same as above, but works with docinfo
 const BYTE *		sphGetBlobAttr ( const CSphRowitem * pDocinfo, const CSphAttrLocator & tLocator, const BYTE * pBlobPool, int & iLengthBytes );
@@ -85,6 +88,9 @@ bool				sphCheckBlobRow ( int64_t iOff, DebugCheckReader_i & tBlobs, const CSphS
 
 // return blob locator attribute name
 const char *		sphGetBlobLocatorName();
+
+// return null mask attribute name
+const char *		GetNullMaskAttrName();
 
 // current docid attribute name
 const char *		sphGetDocidName();
@@ -127,11 +133,8 @@ ESphAttr			sphPlainAttrToPtrAttr ( ESphAttr eAttrType );
 // is this a data ptr attribute?
 bool				sphIsDataPtrAttr ( ESphAttr eAttrType );
 
-namespace sph {
-	// just repack (matter of optimizing)
-	BYTE * CopyPackedAttr ( const BYTE * pData );
-}
-
+// just repack (matter of optimizing)
+FORCE_INLINE BYTE * sphCopyPackedAttr ( const BYTE * pData ) { return sphPackPtrAttr ( sphUnpackPtrAttr ( pData ) ); }
 
 //////////////////////////////////////////////////////////////////////////
 // misc attribute-related
@@ -146,11 +149,26 @@ void	sphPackedFloatVec2Str ( const BYTE * pData, StringBuilder_c & dStr );
 /// check if tColumn is actually stored field (so, can't be used in filters/expressions)
 bool	IsNotRealAttribute ( const CSphColumnInfo & tColumn );
 
-
-inline DocID_t sphGetDocID ( const CSphRowitem * pData )
+FORCE_INLINE DocID_t sphGetDocID ( const CSphRowitem * pData )
 {
 	assert ( pData );
-	return sphUnalignedRead ( *(DocID_t*)(const_cast<CSphRowitem *>(pData)) );
+#if USE_LITTLE_ENDIAN
+	return *(DocID_t *) ( const_cast<CSphRowitem *>(pData) );
+#else
+	return DocID_t ( pData[0] )+( DocID_t ( pData[1] ) << ROWITEM_BITS );
+#endif
+}
+
+FORCE_INLINE void sphDeallocatePacked ( const BYTE* pBlob )
+{
+	if ( !pBlob )
+		return;
+#if WITH_SMALLALLOC
+	const BYTE * pFoo = pBlob;
+	sphDeallocateSmall ( pBlob, sphCalcPackedLength ( UnzipIntBE ( pFoo ) ) );
+#else
+	sphDeallocateSmall ( pBlob );
+#endif
 }
 
 const char * AttrType2Str ( ESphAttr eAttrType );
