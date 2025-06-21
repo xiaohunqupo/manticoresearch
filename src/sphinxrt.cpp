@@ -3761,7 +3761,9 @@ bool RtIndex_c::WriteAttributes ( SaveDiskDataContext_t & tCtx, CSphString & sEr
 	std::unique_ptr<knn::Builder_i> pKNNBuilder;
 	if ( m_tSchema.HasKNNAttrs() )
 	{
-		pKNNBuilder = BuildCreateKNN ( m_tSchema, tCtx.m_iTotalDocuments, dAllAttrsForKNN, sError );
+		CSphString sTmpFilename = tCtx.m_tFilebase.GetTmpFilename(SPH_EXT_SPKNN);
+		sTmpFilename.SetSprintf ( "%s.4bit", sTmpFilename.cstr() );
+		pKNNBuilder = BuildCreateKNN ( m_tSchema, tCtx.m_iTotalDocuments, dAllAttrsForKNN, sTmpFilename, sError );
 		if ( !pKNNBuilder )
 			return false;
 
@@ -9539,7 +9541,7 @@ int64_t RtIndex_c::GetCount() const
 	if ( MustRunInSingleThread ( dQueries, false, dMaxCountDistinct, bForceSingleThread ) )
 		return { 0, 1 };
 
-	bool bHaveKNN = dQueries.any_of ( []( auto & tQuery ){ return !tQuery.m_sKNNAttr.IsEmpty(); } );	 
+	bool bHaveKNN = dQueries.any_of ( []( auto & tQuery ){ return !tQuery.m_tKnnSettings.m_sAttr.IsEmpty(); } );	 
 
 	auto tGuard = RtGuard();
 	int iDiskChunks = tGuard.m_dDiskChunks.GetLength();
@@ -11174,7 +11176,7 @@ bool RtIndex_c::AlterRebuild ( AlterOp_fn && fnOp, CSphString & sError, const ch
 {
 	// strength single-fiber access (don't rely upon to upstream w-lock)
 	ScopedScheduler_c tSerialFiber ( m_tWorkers.SerialChunkAccess() );
-	TRACE_SCHED ( "rt", sTrace );
+	TRACE_SCHED ( "rt", perfetto::StaticString{sTrace} );
 
 	auto pChunks = m_tRtChunks.DiskChunks();
 	for ( auto & tChunk : *pChunks )

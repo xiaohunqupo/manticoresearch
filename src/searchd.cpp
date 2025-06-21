@@ -4534,6 +4534,12 @@ bool AttributeConverter_c::CheckInsertTypes ( const CSphColumnInfo & tCol, const
 		return false;
 	}
 
+	if ( tCol.m_eAttrType==SPH_ATTR_FLOAT_VECTOR && tVal.m_iType!=SqlInsert_t::CONST_MVA )
+	{
+		m_sError.SetSprintf ( "row %d, column %d: incompatible value specified for a float vector column", 1+iRow, 1+iQuerySchemaIdx ); // 1 for human base
+		return false;
+	}
+
 	return true;
 }
 
@@ -8336,7 +8342,12 @@ static bool HandleSetGlobal ( CSphString & sError, const CSphString & sName, int
 			if ( !HttpSetLogVerbosity ( sSetValue ) )
 				sError = "Unknown log_level value (http_on, http_off, http_bad_req_on, http_bad_req_off)";
 		} else
+		{
 			sError = "Unknown log_level value (must be one of info, debug, debugv, debugvv, replication)";
+		}
+		if ( sError.IsEmpty() )
+			BuddySetLogLevel ( g_eLogLevel );
+
 		return true;
 	}
 
